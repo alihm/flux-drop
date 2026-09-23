@@ -19,7 +19,7 @@ a{color:#7ae8d1;text-underline-offset:4px}
 .header-actions a{display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
 .header-actions svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.5}
 #project-count{font:11px ui-monospace,monospace;background:#263b45;color:#a7f0de;border-radius:5px;padding:3px 5px}
-.text-button{background:transparent;border:0;padding:7px 0;font-weight:600;text-decoration:underline;text-decoration-color:#60748a;text-underline-offset:4px}
+.text-button{background:transparent;border:0;padding:7px 0;font-weight:600;text-decoration:underline;text-decoration-color:#60748a;text-underline-offset:4px;white-space:nowrap}
 main{display:grid;grid-template-columns:minmax(0,1fr) minmax(390px,500px);column-gap:76px;row-gap:70px;padding-top:72px}
 .intro{align-self:center;padding:0 0 38px}
 .eyebrow{font:11px ui-monospace,monospace;letter-spacing:1.5px;color:#a8bdd3;margin:0}
@@ -77,22 +77,23 @@ h1 em{font-style:normal;color:#70e2c9}
 .projects{padding-bottom:15px}
 .section-heading h2{margin:8px 0 0;font-size:26px;letter-spacing:-.6px}
 #projects-status{font-size:13px;color:#b3c6d8;line-height:1.5;min-height:18px}
-.project-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:23px}
-.project-card{background:#172333;border:1px solid #344760;border-radius:12px;padding:19px;min-width:0}
+.project-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;margin-top:23px}
+.project-card{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"top actions" "url actions" "meta actions" "status status";column-gap:28px;align-items:center;background:#172333;border:1px solid #344760;border-radius:12px;padding:19px;min-width:0}
 .card-top,.card-actions{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.card-top{grid-area:top;justify-content:flex-start;min-width:0}
 .card-top h3{font-size:17px;letter-spacing:-.2px;margin:0;overflow-wrap:anywhere}
 .card-top h3 a{color:#edf3fb;text-decoration:none}
 .card-top h3 a:hover{text-decoration:underline}
-.card-url{font:11px ui-monospace,monospace;color:#8eabc3;overflow-wrap:anywhere;margin:7px 0 17px}
+.card-url{grid-area:url;font:11px ui-monospace,monospace;color:#8eabc3;overflow-wrap:anywhere;margin:7px 0 10px}
 .badge{font:11px ui-monospace,monospace;white-space:nowrap;padding:5px 7px;border-radius:5px;background:#224238;color:#a1efd1}
 .badge.private{background:#45392b;color:#f1d39f}
-.card-meta{display:flex;flex-wrap:wrap;gap:8px 17px;font-size:12px;color:#afc1d2;padding-bottom:17px;border-bottom:1px solid #344760}
+.card-meta{grid-area:meta;display:flex;flex-wrap:wrap;gap:8px 17px;font-size:12px;color:#afc1d2}
 .card-meta .expiring{color:#f3c695}
-.card-actions{align-items:center;justify-content:flex-start;flex-wrap:wrap;margin-top:16px}
+.card-actions{grid-area:actions;align-items:center;justify-content:flex-end;flex-wrap:wrap;min-width:0}
 .card-actions button,.card-actions a{font-size:12px}
 .card-actions a{padding:10px 1px;text-decoration:none}
 .card-actions .claim{background:#6de1c9;color:#09231f}
-.card-status{font-size:12px;color:#d6cfae;line-height:1.5;min-height:0;margin:11px 0 0}
+.card-status{grid-area:status;font-size:12px;color:#d6cfae;line-height:1.5;min-height:0;margin:11px 0 0}
 #more-projects{margin-top:17px}
 footer{border-top:1px solid #344052;margin-top:25px;padding:32px 0 40px;color:#899db3;font-size:12px}
 dialog{width:min(680px,calc(100vw - 30px));max-height:min(90vh,920px);padding:0;border:1px solid #50637c;border-radius:15px;background:#172333;color:#edf3fb;box-shadow:0 20px 90px #000a}
@@ -114,6 +115,7 @@ dialog::backdrop{background:#040913bb;backdrop-filter:blur(4px)}
 .manage-panel .danger{background:#39282d;border-color:#a05863;color:#ffbdc4}
 .management-status{font-size:12px;color:#bcd4e4;line-height:1.5;min-height:17px;margin:14px 0 0}
 @media(max-width:900px){main{grid-template-columns:1fr;row-gap:37px;padding-top:42px}.intro{padding:0}.intro h1{max-width:700px}.publish{max-width:700px;width:100%;margin:auto}.details,.projects{grid-column:1}.steps{gap:20px}}
-@media(max-width:620px){.shell{padding:0 20px}.site-header{min-height:70px}.brand{font-size:23px}.header-actions{gap:13px}.header-actions a,.header-actions .text-button{font-size:12px}.header-actions a[href="#how-it-works"]{display:none}main{padding-top:36px;row-gap:33px}h1{font-size:clamp(42px,11vw,58px);line-height:1.08;letter-spacing:-2px;margin:17px 0}.lede{font-size:16px}.facts{margin-top:19px}.publish{padding:18px}.dropzone{padding:22px 12px}.steps{grid-template-columns:1fr;gap:19px}.details{padding:23px 0}.project-grid{grid-template-columns:1fr}.section-heading h2{font-size:23px}.dialog-shell{padding:19px}footer{align-items:flex-start}}
+@media(max-width:760px){.project-card{grid-template-columns:minmax(0,1fr);grid-template-areas:"top" "url" "meta" "actions" "status"}.card-meta{padding-bottom:14px;border-bottom:1px solid #344760}.card-actions{margin-top:14px}}
+@media(max-width:620px){.shell{padding:0 20px}.site-header{min-height:70px}.brand{font-size:23px}.header-actions{gap:13px}.header-actions a,.header-actions .text-button{font-size:12px}.header-actions a[href="#how-it-works"],.projects-nav-label{display:none}main{padding-top:36px;row-gap:33px}h1{font-size:clamp(42px,11vw,58px);line-height:1.08;letter-spacing:-2px;margin:17px 0}.lede{font-size:16px}.facts{margin-top:19px}.publish{padding:18px}.dropzone{padding:22px 12px}.steps{grid-template-columns:1fr;gap:19px}.details{padding:23px 0}.section-heading h2{font-size:23px}.dialog-shell{padding:19px}footer{align-items:flex-start}}
 @media(max-width:350px){.header-actions{gap:8px}.header-actions a{font-size:11px}.pickers{flex-direction:column}.pickers button{width:100%}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.dropzone,#progress-fill{transition:none}}

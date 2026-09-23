@@ -9,7 +9,7 @@ Run `node ui-dev.mjs` (Node 20+) and open
 <http://127.0.0.1:5173/>. The browser reloads when
 `internal/httpserver/ui/home.html`, `home.css`, or `home.js` changes. The server
 binds only to localhost and uses an in-memory project API and simulated Google
-sign-in, so you can publish a sample HTML file, inspect cards, claim it, and use
+sign-in (the header's Google sign-in button is a demo), so you can publish a sample HTML file, inspect cards, claim it, and use
 the management dialog. Restart the process to clear demo projects. Pass a port as
 the first argument if 5173 is in use, for example `node ui-dev.mjs 5174`.
 

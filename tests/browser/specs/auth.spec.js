@@ -6,9 +6,9 @@ test('cancelled Google popup preserves the anonymous session',async({page})=>{
   await page.route('**/api/config',r=>r.fulfill({json:{authenticationEnabled:true,publishingEnabled:false,firebase:{projectId:'demo-drop'},limits:{uploadBytes:52428800,files:5000}}}));
   await page.route('**/api/session',r=>r.fulfill({json:{csrfToken:'anonymous',authenticated:false}}));
   await page.route('**/api/auth/google',r=>{exchanges++;return r.fulfill({status:500});});
-  await page.goto('/');await page.getByRole('button',{name:'Sign in',exact:true}).click();
+  await page.goto('/');await page.getByRole('button',{name:'Sign in with Google',exact:true}).click();
   await expect(page.locator('#auth-status')).toContainText('Sign-in cancelled');
-  await expect(page.getByRole('button',{name:'Sign in',exact:true})).toBeEnabled();
+  await expect(page.getByRole('button',{name:'Sign in with Google',exact:true})).toBeEnabled();
   await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeHidden();expect(exchanges).toBe(0);
 });
 
@@ -37,4 +37,20 @@ test('Google exchange rotates CSRF before claiming and logout requires confirmat
   page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'Sign out',exact:true}).click();
   await expect(page.locator('#auth-status')).toContainText('new anonymous session');expect(logout).toBe(1);
   expect(await page.evaluate(()=>window.authCleared)).toBe(true);
+});
+
+test('server sign-out remains complete if Firebase client cleanup fails',async({page})=>{
+  await page.addInitScript(()=>{window.DropAuth={init(){},async token(){return 'test-google-token';},async clear(){throw new Error('client cleanup failed');}};});
+  await page.route('**/api/config',r=>r.fulfill({json:{authenticationEnabled:true,publishingEnabled:true,firebase:{projectId:'demo-drop'},limits:{uploadBytes:52428800,files:5000}}}));
+  await page.route('**/api/session',r=>r.fulfill({json:{csrfToken:'anonymous',authenticated:false}}));
+  await page.route('**/api/projects',r=>r.fulfill({json:{projects:[]}}));
+  await page.route('**/api/auth/google',r=>r.fulfill({json:{csrfToken:'signed-in',authenticated:true}}));
+  await page.route('**/api/auth/logout',r=>r.fulfill({json:{csrfToken:'signed-out',authenticated:false}}));
+  await page.goto('/');
+  await page.getByRole('button',{name:'Sign in with Google'}).click();
+  await expect(page.getByRole('button',{name:'Sign out'})).toBeVisible();
+  page.once('dialog',d=>d.accept());
+  await page.getByRole('button',{name:'Sign out'}).click();
+  await expect(page.getByRole('button',{name:'Sign in with Google'})).toBeVisible();
+  await expect(page.locator('#auth-status')).toContainText('Signed out. A new anonymous session is active.');
 });

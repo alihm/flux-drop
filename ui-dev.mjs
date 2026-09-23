@@ -18,8 +18,7 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 const projects = new Map();
 const operations = new Map();
 const listeners = new Set();
-let authenticated = false;
-let csrfToken = randomBytes(24).toString('base64url');
+const sessions = new Map();
 const namePattern = /^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/;
 const idPattern = /^[a-f0-9]{32}$/;
 const maxUpload = 50 * 1048576;
@@ -32,8 +31,15 @@ function json(res, status, value) {
 
 function failure(res, status, code) { json(res, status, {error: code}); }
 
-function session() {
-  return {csrfToken, authenticated, reauthenticationRequired: false};
+function previewSession(req, res, create = false) {
+  const id = (req.headers.cookie || '').split(';').map(value => value.trim()).find(value => value.startsWith('drop-ui-preview='))?.slice(16);
+  if (id && sessions.has(id)) return sessions.get(id);
+  if (!create) return null;
+  const nextID = randomBytes(24).toString('base64url');
+  const next = {csrfToken: randomBytes(24).toString('base64url'), authenticated: false, reauthenticationRequired: false};
+  sessions.set(nextID, next);
+  res.setHeader('Set-Cookie', `drop-ui-preview=${nextID}; Path=/; HttpOnly; SameSite=Lax`);
+  return next;
 }
 
 async function bodyBytes(req, limit = 60 * 1048576) {
@@ -117,7 +123,7 @@ function mime(path) {
 
 async function home(res) {
   const [html, css, js] = await Promise.all(['home.html', 'home.css', 'home.js'].map(name => readFile(join(ui, name), 'utf8')));
-  const mockAuth = `window.DropAuth={init(){},async token(){return 'ui-preview-token'},async clear(){}};`;
+  const mockAuth = `window.DropAuth ||= {preview:true,init(){},async token(){return 'ui-preview-token'},async clear(){}};`;
   const reload = `new EventSource('/__ui/reload').onmessage=()=>location.reload();`;
   const page = html.replace('{{.CSS}}', css).replace('{{.JS}}', mockAuth + '\n' + js + '\n' + reload);
   res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'});
@@ -140,16 +146,19 @@ async function handle(req, res) {
     limits: {uploadBytes: maxUpload, expandedBytes: 200 * 1048576, files: 5000},
     firebase: {projectId: 'ui-preview'}
   });
-  if (path === '/api/session' && req.method === 'POST') return json(res, 200, session());
+  if (path === '/api/session' && req.method === 'POST') return json(res, 200, previewSession(req, res, true));
+  const viewer = previewSession(req, res);
   if (path === '/api/auth/google' && req.method === 'POST') {
-    authenticated = true;
-    csrfToken = randomBytes(24).toString('base64url');
-    return json(res, 200, session());
+    if (!viewer || req.headers['x-csrf-token'] !== viewer.csrfToken) return failure(res, 403, 'invalid_session');
+    viewer.authenticated = true;
+    viewer.csrfToken = randomBytes(24).toString('base64url');
+    return json(res, 200, viewer);
   }
   if (path === '/api/auth/logout' && req.method === 'POST') {
-    authenticated = false;
-    csrfToken = randomBytes(24).toString('base64url');
-    return json(res, 200, session());
+    if (!viewer || req.headers['x-csrf-token'] !== viewer.csrfToken) return failure(res, 403, 'invalid_session');
+    viewer.authenticated = false;
+    viewer.csrfToken = randomBytes(24).toString('base64url');
+    return json(res, 200, viewer);
   }
   if (path === '/api/projects' && req.method === 'GET') {
     return json(res, 200, {projects: [...projects.values()].map(projectJSON), nextCursor: ''});
@@ -167,7 +176,7 @@ async function handle(req, res) {
     if ([...projects.values()].some(project => project.slug === slug)) return failure(res, 409, 'name_conflict');
     const project = {
       id: randomBytes(16).toString('hex'), slug, revision: 1, private: false,
-      createdAt: new Date().toISOString(), expiresAt: authenticated ? null : new Date(Date.now() + 30 * 86400000).toISOString(),
+      createdAt: new Date().toISOString(), expiresAt: viewer?.authenticated ? null : new Date(Date.now() + 30 * 86400000).toISOString(),
       bytes: files.reduce((sum, file) => sum + file.bytes.length, 0),
       files: normalizedFiles(files), digest: fullDigest
     };
@@ -186,7 +195,7 @@ async function handle(req, res) {
     const project = matchingProject(req, res, id);
     if (!project) return;
     if (action === 'claim' && req.method === 'POST') {
-      if (!authenticated) return failure(res, 403, 'sign_in_required');
+      if (!viewer?.authenticated) return failure(res, 403, 'sign_in_required');
       project.expiresAt = null;
       return json(res, 200, changed(project));
     }

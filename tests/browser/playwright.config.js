@@ -9,7 +9,7 @@ export default defineConfig({
   timeout: 20_000,
   reporter: 'list',
   use: {
-    baseURL: 'https://localhost:18443',
+    baseURL: process.env.DROP_TEST_BASE_URL || 'https://localhost:18443',
     ignoreHTTPSErrors: true,
     trace: 'retain-on-failure',
   },

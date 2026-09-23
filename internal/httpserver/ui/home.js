@@ -22,6 +22,7 @@
   }
 
   function setAuthState() {
+    $('sign-in').textContent = window.DropAuth?.preview ? 'Google sign-in' : 'Sign in with Google';
     $('sign-in').hidden = !config?.firebase || !window.DropAuth || Boolean(session?.authenticated);
     $('sign-out').hidden = !session?.authenticated && !session?.reauthenticationRequired;
     $('sign-in').disabled = authenticating || !session;
@@ -233,7 +234,7 @@
     if (authenticating || uploading || managing || !session || !window.DropAuth) return false;
     authenticating = true;
     state();
-    $('auth-status').textContent = 'Complete sign-in in the Google window.';
+    $('auth-status').textContent = window.DropAuth.preview ? 'Signing in to the local UI demo…' : 'Complete sign-in in the Google window.';
     try {
       // Open the popup in the click handler's user gesture, before any network await.
       const idToken = await window.DropAuth.token();
@@ -255,7 +256,7 @@
     state();
     try {
       await exchange('/api/auth/logout', {});
-      await window.DropAuth?.clear();
+      try { await window.DropAuth?.clear(); } catch { /* The server session is already signed out. */ }
       $('auth-status').textContent = 'Signed out. A new anonymous session is active.';
       await listProjects();
     } catch (error) { $('auth-status').textContent = error.message; }
@@ -518,7 +519,8 @@
         session = await bootstrap.json();
         if (!session.csrfToken) throw new Error('A secure session could not be established. Refresh this page.');
         $('auth-status').textContent = session.authenticated ? 'Signed in · Claimed projects have no expiry.'
-          : session.reauthenticationRequired ? 'Sign in again to restore account access.' : '';
+          : session.reauthenticationRequired ? 'Sign in again to restore account access.'
+            : window.DropAuth?.preview ? 'UI preview · Google sign-in is simulated.' : '';
         state();
         if (config.publishingEnabled) await listProjects();
       }
