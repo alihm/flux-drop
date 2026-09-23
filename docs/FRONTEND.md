@@ -14,16 +14,21 @@ analytics, or runtime UI packages are loaded. Google sign-in uses a locally buil
 Firebase browser bundle only when the public Firebase web settings are configured.
 
 The landing page accepts a single HTML file, a ZIP, or a folder/multiple files
-with a root `index.html`. It validates file count, total upload size, and the
+with a root `index.html`. Folders can be selected or dragged onto the drop zone;
+directory entries are read in batches and their relative paths are retained.
+If a browser cannot expose a dropped directory, the UI asks the visitor to use
+Choose folder instead. The page validates file count, total upload size, and the
 visible entry point before sending a request. Browser checks are advisory; Go
-enforces the actual content and path rules. The file list can be cleared. An XHR
-upload shows transfer progress and can be cancelled. An aborted request might
-still complete on the server; the same idempotency key is retained for a safe
+enforces the actual content and path rules. Naming appears only after files are
+selected, with a suggested name already filled in. The file list can be
+cleared. An XHR upload shows transfer progress and can be cancelled. An aborted
+request might still complete on the server; the same idempotency key is retained for a safe
 retry. Once a publish result is confirmed, the publish control stays disabled
 until the user starts another selection.
 
-The success state includes the public URL, copy and open actions, and a direct
-claim action for anonymous projects. The header and project section are hidden
+The success state replaces the upload zone with a prominent public URL, copy and
+open actions, and a separate claim callout for anonymous projects. The header
+and project section are hidden
 for a new anonymous session with no projects. Signed-in users see an empty
 workspace state. Project cards show URL, visibility, size, creation date when
 available, and claim or manage actions as appropriate. Management opens a native

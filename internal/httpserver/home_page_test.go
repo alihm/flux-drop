@@ -23,7 +23,7 @@ func TestHomePage(t *testing.T) {
 		if method == "HEAD" && w.Body.Len() != 0 {
 			t.Fatal("HEAD body")
 		}
-		if method == "GET" && (!strings.Contains(w.Body.String(), "Publish project") || !strings.Contains(w.Body.String(), "Keep this project") || !strings.Contains(w.Body.String(), "manage-dialog")) {
+		if method == "GET" && (!strings.Contains(w.Body.String(), `id="publish"`) || !strings.Contains(w.Body.String(), `id="claim-result"`) || !strings.Contains(w.Body.String(), "manage-dialog")) {
 			t.Fatal("missing publishing UI or release limitation")
 		}
 	}

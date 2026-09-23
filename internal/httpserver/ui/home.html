@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="Publish a static site from HTML, a ZIP, or a folder. No build pipeline required.">
+  <meta name="description" content="Drop an HTML file, ZIP, or folder and get a shareable static site. No account or build step required.">
   <meta name="theme-color" content="#101722">
   <title>Flux Drop · Publish a static site</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23101722'/%3E%3Cpath d='M32 10v30m-11-11 11 11 11-11M16 46h32' stroke='%2362e2c4' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
@@ -24,44 +24,43 @@
     <main>
       <div class="intro">
         <p class="eyebrow"><span class="dot"></span> STATIC PUBLISHING ON FLUX</p>
-        <h1>From files to a <em>live URL.</em></h1>
-        <p class="lede">Publish HTML, a ZIP, or a ready-to-serve folder. Get a link in one step.</p>
-        <div class="facts"><span>No account needed</span><span>Static sites only</span></div>
+        <h1>Drop your files.<br><em>Share your site.</em></h1>
+        <p class="lede">A live link for your HTML, CSS, JavaScript, and assets. No account or build step required.</p>
         <p id="auth-status" class="auth-status" role="status" aria-live="polite"></p>
       </div>
 
-      <section class="publish" aria-labelledby="publish-heading">
-        <div class="panel-head"><h2 id="publish-heading">Publish a site</h2><span class="tag">STATIC</span></div>
-        <div id="dropzone" class="dropzone" aria-label="Drop site files here">
-          <div class="upload-icon" aria-hidden="true">↑</div>
-          <p class="drop-title">Drop your HTML or ZIP here</p>
-          <p>For a site folder, use Choose folder.</p>
-          <div class="pickers"><button id="choose-files" type="button">Choose files</button><button id="choose-folder" type="button" class="secondary">Choose folder</button></div>
+      <section id="publish-panel" class="publish" aria-labelledby="publish-heading">
+        <div class="panel-head"><h2 id="publish-heading">Publish a static site</h2><span class="tag"><span class="tag-dot"></span> NO BUILD</span></div>
+        <div id="dropzone" class="dropzone" aria-label="Drop an HTML file, ZIP, or folder here">
+          <div class="upload-icon" aria-hidden="true"><svg viewBox="0 0 64 64" fill="none"><path d="M32 41V16m0 0L22 26m10-10 10 10M16 42v6a4 4 0 0 0 4 4h24a4 4 0 0 0 4-4v-6" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <p id="drop-title" class="drop-title">Drop an HTML file, ZIP, or folder</p>
+          <p class="drop-subtitle">Your ready-to-serve site goes live at a shareable URL.</p>
+          <div class="pickers"><button id="choose-files" type="button">Choose files <span aria-hidden="true">↗</span></button><button id="choose-folder" type="button" class="secondary">Choose folder</button></div>
           <input id="files" type="file" multiple hidden><input id="folder" type="file" webkitdirectory multiple hidden>
-          <p class="limits" id="limits">Checking upload limits…</p>
         </div>
-        <div class="selection-row"><p id="selection" aria-live="polite">No files selected</p><button id="clear-selection" class="text-button" type="button" hidden>Clear</button></div>
-        <ul id="selected-files" class="selected-files" hidden></ul>
-        <label for="name">Project name</label>
-        <input id="name" maxlength="48" autocomplete="off" spellcheck="false" aria-describedby="name-help">
-        <p id="name-help" class="field-hint">Lowercase letters, numbers, and hyphens. A unique suffix is added to the URL.</p>
-        <button id="publish" class="primary-action" type="button" disabled>Publish project <span aria-hidden="true">↗</span></button>
+        <div class="upload-notes" aria-label="Publishing details"><span>Static files only</span><span id="limits">Checking upload limits…</span><span>Unclaimed sites expire in 30 days</span></div>
+        <div id="selection-stage" class="selection-stage" hidden>
+          <div class="selection-row"><div><p class="selection-kicker">READY TO PUBLISH</p><p id="selection" aria-live="polite">No files selected</p></div><button id="clear-selection" class="text-button" type="button" hidden>Clear selection</button></div>
+          <ul id="selected-files" class="selected-files" hidden></ul>
+          <div class="name-row"><div><label for="name">Project name</label><p class="field-hint">We picked a name for you. Change it if you like.</p></div><div class="name-input-wrap"><input id="name" maxlength="48" autocomplete="off" spellcheck="false" aria-describedby="name-help"><p id="name-help" class="field-hint">A unique suffix is added to the URL.</p></div></div>
+          <button id="publish" class="primary-action" type="button" disabled>Publish site <span aria-hidden="true">↗</span></button>
+        </div>
         <div id="upload-progress" class="upload-progress" hidden><div class="progress-track"><div id="progress-fill"></div></div><span id="progress-label" aria-live="polite"></span><button id="cancel-upload" class="text-button" type="button">Cancel upload</button></div>
         <p id="status" role="status" aria-live="polite">Connecting…</p>
         <div id="result" class="result" hidden>
-          <p class="result-title" id="result-label"></p>
-          <a id="project-link" target="_blank" rel="noopener noreferrer"></a>
-          <div class="result-actions"><button id="copy-result" class="secondary" type="button">Copy link</button><button id="claim-result" class="secondary" type="button" hidden>Keep this project</button><button id="publish-another" class="text-button" type="button">Publish another</button></div>
-          <p id="expiry" class="field-hint"></p>
+          <div class="result-head"><span class="result-check" aria-hidden="true">✓</span><div><p id="result-kicker" class="result-kicker">PUBLISHED ON FLUX</p><h2 class="result-title" id="result-label" tabindex="-1"></h2><p id="result-subtitle" class="result-subtitle">Your link is ready to share.</p></div></div>
+          <div class="result-link-row"><a id="project-link" target="_blank" rel="noopener noreferrer"></a><button id="copy-result" type="button">Copy link</button></div>
+          <div class="result-actions"><a id="open-result" class="secondary action-link" target="_blank" rel="noopener noreferrer">Open site ↗</a><button id="publish-another" class="text-button" type="button">Publish another</button></div>
+          <div id="claim-callout" class="claim-callout" hidden><div><p class="claim-title">Make it yours</p><p id="expiry" class="field-hint"></p></div><button id="claim-result" class="secondary" type="button">Claim project</button></div>
         </div>
       </section>
 
       <section id="how-it-works" class="details" aria-labelledby="how-heading">
-        <h2 id="how-heading">How it works</h2>
+        <h2 id="how-heading">Simple from start to share</h2>
         <div class="steps">
-          <article><span>01</span><h3>Bring ready files</h3><p>Upload HTML, a ZIP, or a folder with an index.html. No server code or build step runs here.</p></article>
-          <article><span>02</span><h3>Get a stable link</h3><p>Choose a name. Updates keep the original URL even when your files change.</p></article>
-          <article><span>03</span><h3>Keep it if you like</h3><p>Anonymous projects expire after 30 days. Claim with Google to keep them.</p></article>
+          <article><span>01 / DROP</span><h3>Bring ready files</h3><p>One HTML file, a ZIP, or a folder with an <code>index.html</code>. We serve the files as-is.</p></article>
+          <article><span>02 / SHARE</span><h3>Get a live URL</h3><p>Publish with a suggested name or choose your own. Your link stays the same when you update the site.</p></article>
+          <article><span>03 / KEEP</span><h3>Claim when you’re ready</h3><p>No account to publish. Sign in with Google to keep a project beyond 30 days.</p></article>
         </div>
         <details class="quick-guide"><summary>What files should I upload?</summary><div><p>A single HTML file becomes <code>index.html</code>. For a multi-file site, choose a folder or ZIP whose root contains <code>index.html</code>. Keep asset links relative so the site works under its project URL.</p><pre>my-site/
   index.html

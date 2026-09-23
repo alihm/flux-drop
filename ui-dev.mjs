@@ -37,6 +37,7 @@ function previewSession(req, res, create = false) {
   if (!create) return null;
   const nextID = randomBytes(24).toString('base64url');
   const next = {csrfToken: randomBytes(24).toString('base64url'), authenticated: false, reauthenticationRequired: false};
+  Object.defineProperties(next, {id: {value: nextID}, anonymousOwner: {value: randomBytes(24).toString('base64url'), writable: true}});
   sessions.set(nextID, next);
   res.setHeader('Set-Cookie', `drop-ui-preview=${nextID}; Path=/; HttpOnly; SameSite=Lax`);
   return next;
@@ -100,8 +101,12 @@ function digest(files) {
 }
 
 function projectJSON(project) {
-  const {files, digest: _, ...publicProject} = project;
+  const {files, digest: _, anonymousOwner, accountOwner, ...publicProject} = project;
   return publicProject;
+}
+
+function canManage(project, viewer) {
+  return Boolean(viewer && (project.anonymousOwner === viewer.anonymousOwner || viewer.authenticated && project.accountOwner === viewer.id));
 }
 
 function changed(project) {
@@ -109,9 +114,10 @@ function changed(project) {
   return {project: projectJSON(project), path: '/' + project.slug + '/'};
 }
 
-function matchingProject(req, res, id) {
+function matchingProject(req, res, id, viewer) {
   if (!idPattern.test(id) || !projects.has(id)) { failure(res, 404, 'not_found'); return null; }
   const project = projects.get(id);
+  if (!canManage(project, viewer)) { failure(res, 404, 'not_found'); return null; }
   if (req.headers['if-match'] !== `"${project.revision}"`) { failure(res, 409, 'revision_conflict'); return null; }
   return project;
 }
@@ -157,13 +163,15 @@ async function handle(req, res) {
   if (path === '/api/auth/logout' && req.method === 'POST') {
     if (!viewer || req.headers['x-csrf-token'] !== viewer.csrfToken) return failure(res, 403, 'invalid_session');
     viewer.authenticated = false;
+    viewer.anonymousOwner = randomBytes(24).toString('base64url');
     viewer.csrfToken = randomBytes(24).toString('base64url');
     return json(res, 200, viewer);
   }
   if (path === '/api/projects' && req.method === 'GET') {
-    return json(res, 200, {projects: [...projects.values()].map(projectJSON), nextCursor: ''});
+    return json(res, 200, {projects: [...projects.values()].filter(project => canManage(project, viewer)).map(projectJSON), nextCursor: ''});
   }
   if (path === '/api/projects' && req.method === 'POST') {
+    if (!viewer) return failure(res, 401, 'invalid_session');
     const name = url.searchParams.get('name') || '';
     if (!namePattern.test(name)) return failure(res, 400, 'invalid_name');
     const files = await bodyFiles(req);
@@ -178,7 +186,9 @@ async function handle(req, res) {
       id: randomBytes(16).toString('hex'), slug, revision: 1, private: false,
       createdAt: new Date().toISOString(), expiresAt: viewer?.authenticated ? null : new Date(Date.now() + 30 * 86400000).toISOString(),
       bytes: files.reduce((sum, file) => sum + file.bytes.length, 0),
-      files: normalizedFiles(files), digest: fullDigest
+      files: normalizedFiles(files), digest: fullDigest,
+      anonymousOwner: viewer.authenticated ? null : viewer.anonymousOwner,
+      accountOwner: viewer.authenticated ? viewer.id : null
     };
     projects.set(project.id, project);
     const result = {project: projectJSON(project), path: '/' + slug + '/'};
@@ -190,13 +200,15 @@ async function handle(req, res) {
     const [, id, action] = projectRoute;
     if (!action && req.method === 'GET') {
       const project = projects.get(id);
-      return project ? json(res, 200, {project: projectJSON(project), path: '/' + project.slug + '/'}) : failure(res, 404, 'not_found');
+      return project && canManage(project, viewer) ? json(res, 200, {project: projectJSON(project), path: '/' + project.slug + '/'}) : failure(res, 404, 'not_found');
     }
-    const project = matchingProject(req, res, id);
+    const project = matchingProject(req, res, id, viewer);
     if (!project) return;
     if (action === 'claim' && req.method === 'POST') {
       if (!viewer?.authenticated) return failure(res, 403, 'sign_in_required');
       project.expiresAt = null;
+      project.anonymousOwner = null;
+      project.accountOwner = viewer.id;
       return json(res, 200, changed(project));
     }
     if (action === 'privacy' && req.method === 'PUT') {

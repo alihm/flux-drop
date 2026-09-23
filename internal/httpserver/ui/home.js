@@ -11,7 +11,7 @@
   };
   const dialog = $('manage-dialog');
   let config, session, files = [], selectionError = '', key = '', cursor = '';
-  let uploading = false, authenticating = false, managing = false, published = false;
+  let uploading = false, authenticating = false, managing = false, published = false, selecting = false;
   let currentUpload, lastPublishedProject, modalTrigger;
 
   $('name').value = randomName();
@@ -33,23 +33,31 @@
     const nameValid = namePattern.test($('name').value);
     $('name').setAttribute('aria-invalid', String(!nameValid));
     $('name-help').textContent = nameValid
-      ? 'Lowercase letters, numbers, and hyphens. A unique suffix is added to the URL.'
+      ? 'A unique suffix is added to the URL.'
       : 'Use 1–48 lowercase letters, numbers, or internal hyphens.';
-    $('choose-files').disabled = uploading;
-    $('choose-folder').disabled = uploading;
+    $('selection-stage').hidden = !files.length || published;
+    $('publish-panel').classList.toggle('is-published', published);
+    $('publish-panel').classList.toggle('has-selection', files.length > 0 && !published);
+    $('drop-title').textContent = files.length && !published ? 'Change your files' : 'Drop an HTML file, ZIP, or folder';
+    $('claim-result').textContent = session?.authenticated ? 'Claim project' : 'Claim with Google';
+    $('choose-files').disabled = uploading || selecting;
+    $('choose-folder').disabled = uploading || selecting;
     $('name').disabled = uploading;
-    $('publish').disabled = uploading || authenticating || published || !config?.publishingEnabled || !session || !files.length || Boolean(selectionError) || !nameValid;
-    $('clear-selection').disabled = uploading;
+    $('publish').disabled = uploading || selecting || authenticating || published || !config?.publishingEnabled || !session || !files.length || Boolean(selectionError) || !nameValid;
+    $('clear-selection').disabled = uploading || selecting;
     setAuthState();
   }
+
+  const fileOf = item => item.file || item;
+  const pathOf = item => item.path || item.webkitRelativePath || item.name;
 
   function selectionProblem(selected) {
     if (!config) return 'The service is still connecting. Try again in a moment.';
     if (selected.length > config.limits.files) return `Choose no more than ${config.limits.files.toLocaleString()} files.`;
-    if (selected.reduce((sum, file) => sum + file.size, 0) > config.limits.uploadBytes) return 'This selection exceeds the upload limit. Choose a smaller site.';
+    if (selected.reduce((sum, item) => sum + fileOf(item).size, 0) > config.limits.uploadBytes) return 'This selection exceeds the upload limit. Choose a smaller site.';
     if (!selected.length) return '';
-    if (selected.length === 1 && /\.(html?|zip)$/i.test(selected[0].name)) return '';
-    const paths = selected.map(file => file.webkitRelativePath || file.name);
+    if (selected.length === 1 && /\.(html?|zip)$/i.test(pathOf(selected[0]))) return '';
+    const paths = selected.map(pathOf);
     if (paths.includes('index.html')) return '';
     const roots = new Set(paths.map(path => path.split('/')[0]));
     if (roots.size === 1 && paths.includes([...roots][0] + '/index.html')) return '';
@@ -57,16 +65,16 @@
   }
 
   function renderSelection() {
-    const total = files.reduce((sum, file) => sum + file.size, 0);
+    const total = files.reduce((sum, item) => sum + fileOf(item).size, 0);
     $('selection').textContent = files.length
-      ? `${files.length} file${files.length === 1 ? '' : 's'} · ${(total / 1048576).toFixed(2)} MiB`
+      ? `${files.length} file${files.length === 1 ? '' : 's'} · ${bytesLabel(total)}`
       : 'No files selected';
     $('clear-selection').hidden = !files.length;
     const list = $('selected-files');
     list.replaceChildren();
     for (const file of files.slice(0, 5)) {
       const item = document.createElement('li');
-      item.textContent = file.webkitRelativePath || file.name;
+      item.textContent = pathOf(file);
       list.append(item);
     }
     if (files.length > 5) {
@@ -89,7 +97,7 @@
 
   function choose(selected) {
     if (uploading) return;
-    files = selected;
+    files = selected.map(item => item.file ? item : {file: item, path: pathOf(item)});
     selectionError = selectionProblem(files);
     key = crypto.randomUUID();
     published = false;
@@ -114,15 +122,51 @@
     zone.addEventListener(eventName, event => { event.preventDefault(); zone.classList.add('drag'); });
   }
   zone.addEventListener('dragleave', event => { if (!zone.contains(event.relatedTarget)) zone.classList.remove('drag'); });
-  zone.addEventListener('drop', event => {
+  async function droppedFiles(items, fallback) {
+    const sources = items.filter(item => item.kind === 'file').map(item => ({entry: item.webkitGetAsEntry?.(), file: item.getAsFile?.()}));
+    if (!sources.length) return fallback.map(file => ({file, path: file.name}));
+    const selected = [];
+    let bytes = 0;
+    const add = (file, path) => {
+      selected.push({file, path});
+      bytes += file.size;
+      if (config && selected.length > config.limits.files) throw new Error(`Choose no more than ${config.limits.files.toLocaleString()} files.`);
+      if (config && bytes > config.limits.uploadBytes) throw new Error('This selection exceeds the upload limit. Choose a smaller site.');
+    };
+    const walk = async (entry, prefix = '') => {
+      const path = prefix + entry.name;
+      if (entry.isFile) {
+        const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+        add(file, path);
+      } else if (entry.isDirectory) {
+        const reader = entry.createReader();
+        while (true) {
+          const batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+          if (!batch.length) break;
+          for (const child of batch) await walk(child, path + '/');
+        }
+      }
+    };
+    for (const source of sources) {
+      if (source.entry) await walk(source.entry);
+      else if (source.file) add(source.file, source.file.name);
+      else throw new Error('This browser cannot read a dropped folder. Use Choose folder instead.');
+    }
+    if (!selected.length) throw new Error('No files were found. Choose a folder with an index.html file.');
+    return selected;
+  }
+  zone.addEventListener('drop', async event => {
     event.preventDefault();
     zone.classList.remove('drag');
+    if (uploading || selecting) return;
     const items = [...event.dataTransfer.items];
-    if (items.some(item => item.webkitGetAsEntry?.()?.isDirectory)) {
-      status('To keep folder paths intact, use Choose folder.', true);
-      return;
-    }
-    choose([...event.dataTransfer.files]);
+    const fallback = [...event.dataTransfer.files];
+    selecting = true;
+    state();
+    status('Reading your files…');
+    try { choose(await droppedFiles(items, fallback)); }
+    catch (error) { status(error.message || 'Could not read those files. Try Choose folder.', true); }
+    finally { selecting = false; state(); }
   });
 
   function upload(url, body, headers, onProgress) {
@@ -187,7 +231,7 @@
     status('Uploading and verifying your files…');
     try {
       const body = new FormData();
-      for (const file of files) body.append('files', file, file.webkitRelativePath || file.name);
+      for (const item of files) body.append('files', fileOf(item), pathOf(item));
       const response = await upload('/api/projects?name=' + encodeURIComponent($('name').value), body,
         {'X-CSRF-Token': session.csrfToken, 'Idempotency-Key': key}, percent => {
           $('progress-fill').style.width = percent + '%';
@@ -200,15 +244,21 @@
       if (typeof data.path !== 'string' || !pathPattern.test(data.path)) throw new Error('The server returned an invalid project link.');
       published = true;
       lastPublishedProject = code < 300 && data.project?.expiresAt && /^[a-f0-9]{32}$/.test(data.project?.id) ? data.project : null;
+      $('result-kicker').textContent = code < 300 ? 'PUBLISHED ON FLUX' : 'ALREADY LIVE';
       $('result-label').textContent = code < 300 ? 'Your site is live.' : 'These files are already published.';
+      $('result-subtitle').textContent = code < 300 ? 'Your link is ready to share.' : 'Use the existing link below; no duplicate was created.';
       $('project-link').href = data.path;
       $('project-link').textContent = window.location.origin + data.path;
+      $('open-result').href = data.path;
       $('claim-result').hidden = !lastPublishedProject;
+      $('claim-callout').hidden = !lastPublishedProject;
       $('expiry').textContent = lastPublishedProject
-        ? `Expires ${new Date(lastPublishedProject.expiresAt).toLocaleDateString()}. Claim it to keep it and manage it on another device.`
+        ? `This unclaimed site expires on ${new Date(lastPublishedProject.expiresAt).toLocaleDateString()}. Claim with Google to keep it and manage it from another device.`
         : '';
       $('result').hidden = false;
       status(code < 300 ? 'Published successfully.' : 'No duplicate project was created.');
+      $('result-label').focus({preventScroll: true});
+      $('result').scrollIntoView({behavior: 'smooth', block: 'nearest'});
       await listProjects();
     } catch (error) {
       status(error.name === 'AbortError'
@@ -296,7 +346,9 @@
       if (lastPublishedProject?.id === project.id) {
         lastPublishedProject = null;
         $('claim-result').hidden = true;
+        $('claim-callout').hidden = true;
         $('expiry').textContent = 'Claimed. This project no longer expires.';
+        $('result-subtitle').textContent = 'Claimed. Your site has no expiry.';
       }
       message.textContent = 'Claimed. This project no longer expires.';
       await listProjects();
@@ -511,7 +563,7 @@
       if (!response.ok) throw new Error('Service configuration is unavailable. Refresh this page to retry.');
       config = await response.json();
       if (config.firebase && window.DropAuth) window.DropAuth.init(config.firebase);
-      $('limits').textContent = `${Math.floor(config.limits.uploadBytes / 1048576)} MiB upload · ${config.limits.files.toLocaleString()} files`;
+      $('limits').textContent = `${Math.floor(config.limits.uploadBytes / 1048576)} MiB max · ${config.limits.files.toLocaleString()} files`;
       state();
       if (config.authenticationEnabled) {
         const bootstrap = await fetch('/api/session', {method: 'POST', credentials: 'same-origin', cache: 'no-store'});
