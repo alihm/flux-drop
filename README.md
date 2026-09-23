@@ -86,7 +86,7 @@ Private hosting currently supports self-contained HTML only, with no private
 replica fallback. Public prebuilt React/Vue bundles work within the
 [static compatibility restrictions](docs/STATIC_COMPATIBILITY.md).
 
-[PLAN.md](PLAN.md) tracks the full product. See [storage budgets](docs/STORAGE.md),
+See [storage budgets](docs/STORAGE.md),
 [reclamation requirements](docs/RECLAMATION.md), [session APIs](docs/SESSIONS.md),
 [publishing APIs](docs/PUBLISHING.md), [frontend configuration](docs/FRONTEND.md),
 and [replica internals](docs/REPLICAS.md). Historical progress notes in those files
