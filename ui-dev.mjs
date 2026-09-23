@@ -174,6 +174,8 @@ async function handle(req, res) {
     if (!viewer) return failure(res, 401, 'invalid_session');
     const name = url.searchParams.get('name') || '';
     if (!namePattern.test(name)) return failure(res, 400, 'invalid_name');
+    const secret = req.headers['x-drop-password'];
+    if (secret !== undefined && [...Buffer.from(secret, 'base64url').toString('utf8')].length < 12) return failure(res, 400, 'invalid_password');
     const files = await bodyFiles(req);
     const operation = req.headers['idempotency-key'];
     if (operation && operations.has(operation)) return json(res, 200, operations.get(operation));
@@ -183,7 +185,7 @@ async function handle(req, res) {
     const slug = `${name}-${fullDigest.slice(0, 6)}`;
     if ([...projects.values()].some(project => project.slug === slug)) return failure(res, 409, 'name_conflict');
     const project = {
-      id: randomBytes(16).toString('hex'), slug, revision: 1, private: false,
+      id: randomBytes(16).toString('hex'), slug, revision: 1, private: secret !== undefined,
       createdAt: new Date().toISOString(), expiresAt: viewer?.authenticated ? null : new Date(Date.now() + 30 * 86400000).toISOString(),
       bytes: files.reduce((sum, file) => sum + file.bytes.length, 0),
       files: normalizedFiles(files), digest: fullDigest,

@@ -119,3 +119,62 @@ func TestRaftProjectLifecycle(t *testing.T) {
 		t.Fatal("quorum loss misreported", err)
 	}
 }
+
+func TestRaftPrivateActivationIsNeverPublic(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	store := &metadata.Store{Backend: &testmetadata.Backend{}}
+	sessions := &session.Service{Store: &session.RaftStore{Store: store, CreationsPerMinute: 60}}
+	token, view, err := sessions.Create(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := ActorFrom(token, view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := &RaftRepository{Store: store, Now: func() time.Time { return now }}
+	password := strings.Repeat("c", 64)
+	prepared, err := repo.Reserve(ctx, a, Reservation{Key: "private_one", Name: "secret", Digest: strings.Repeat("a", 64), Bytes: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ActivatePrivate(ctx, a, prepared.Operation.ID, password, prepared.Project.PolicyRevision+2); !errors.Is(err, ErrConflict) {
+		t.Fatal("stale password revision accepted", err)
+	}
+	if _, err := repo.ActivatePrivate(ctx, a, prepared.Operation.ID, "not-a-digest", 2); !errors.Is(err, ErrInvalid) {
+		t.Fatal("invalid password digest accepted", err)
+	}
+	p, err := repo.ActivatePrivate(ctx, a, prepared.Operation.ID, password, prepared.Project.PolicyRevision+1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Private || p.PasswordDigest != password || p.PasswordRevision != 2 || p.PolicyRevision != 2 || !p.Live(now) {
+		t.Fatal("private activation", p)
+	}
+	if resolved, err := repo.Resolve(ctx, p.Slug); err != nil || !resolved.Private {
+		t.Fatal("resolved project is not private", resolved, err)
+	}
+	if again, err := repo.ActivatePrivate(ctx, a, prepared.Operation.ID, password, 2); err != nil || again.Revision != p.Revision {
+		t.Fatal("private retry", again, err)
+	}
+	// Private activation only applies to new projects, never to replacements.
+	update, err := repo.Reserve(ctx, a, Reservation{Key: "private_two", ProjectID: p.ID, Digest: strings.Repeat("b", 64), Bytes: 10, ExpectedRevision: p.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ActivatePrivate(ctx, a, update.Operation.ID, password, p.PolicyRevision+1); !errors.Is(err, ErrConflict) {
+		t.Fatal("private activation of an update", err)
+	}
+	// A public publish that already completed must not be reported as private.
+	public, err := repo.Reserve(ctx, a, Reservation{Key: "public_one", Name: "open", Digest: strings.Repeat("d", 64), Bytes: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Activate(ctx, a, public.Operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ActivatePrivate(ctx, a, public.Operation.ID, password, 2); !errors.Is(err, ErrConflict) {
+		t.Fatal("completed public operation reported as private", err)
+	}
+}

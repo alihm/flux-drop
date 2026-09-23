@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/runonflux/flux-drop/internal/content"
 	"github.com/runonflux/flux-drop/internal/password"
@@ -83,6 +85,13 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 				projectError(w, project.ErrInvalid)
 				return
 			}
+			// A new project may be published private from the start. The password is
+			// base64url-encoded UTF-8 so any characters survive as a header value.
+			secret, private, err := privatePassword(r)
+			if err != nil || (private && update) {
+				projectError(w, password.ErrInvalid)
+				return
+			}
 			if update {
 				if _, err := deps.Projects.Repository.GetOwned(r.Context(), a, request.ProjectID); err != nil {
 					projectError(w, err)
@@ -120,7 +129,12 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 				projectError(w, err)
 				return
 			}
-			result, err := deps.Projects.Publish(r.Context(), a, request, staged)
+			var result project.Project
+			if private {
+				result, err = deps.Projects.PublishPrivate(r.Context(), a, request, staged, hasher, secret)
+			} else {
+				result, err = deps.Projects.Publish(r.Context(), a, request, staged)
+			}
 			if err != nil {
 				projectError(w, err)
 				return
@@ -289,6 +303,21 @@ func revisionError(w http.ResponseWriter, err error) {
 		return
 	}
 	respond(w, http.StatusBadRequest, map[string]string{"error": "invalid_if_match"})
+}
+
+func privatePassword(r *http.Request) (string, bool, error) {
+	values := r.Header.Values("X-Drop-Password")
+	if len(values) == 0 {
+		return "", false, nil
+	}
+	if len(values) != 1 || len(values[0]) > 2048 {
+		return "", false, password.ErrInvalid
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(values[0])
+	if err != nil || len(raw) == 0 || len(raw) > 1024 || !utf8.Valid(raw) {
+		return "", false, password.ErrInvalid
+	}
+	return string(raw), true, nil
 }
 
 func expectedRevision(r *http.Request) (int64, error) {

@@ -192,6 +192,20 @@ func (s *RaftRepository) Reserve(ctx context.Context, a Actor, r Reservation) (P
 }
 
 func (s *RaftRepository) Activate(ctx context.Context, a Actor, opID string) (Project, error) {
+	return s.activate(ctx, a, opID, "", 0)
+}
+
+// ActivatePrivate makes a new project live and password-protected in the same
+// transaction, so it is never publicly resolvable. digest must refer to a
+// durably prepared password record for passwordRevision (PolicyRevision+1).
+func (s *RaftRepository) ActivatePrivate(ctx context.Context, a Actor, opID, digest string, passwordRevision int64) (Project, error) {
+	if !digestRE.MatchString(digest) || passwordRevision < 2 {
+		return Project{}, ErrInvalid
+	}
+	return s.activate(ctx, a, opID, digest, passwordRevision)
+}
+
+func (s *RaftRepository) activate(ctx context.Context, a Actor, opID, passwordDigest string, passwordRevision int64) (Project, error) {
 	if !digestRE.MatchString(opID) {
 		return Project{}, ErrInvalid
 	}
@@ -221,10 +235,17 @@ func (s *RaftRepository) Activate(ctx context.Context, a Actor, opID string) (Pr
 			return err
 		}
 		if op.State == "complete" {
+			// A retried private publish must never silently report a public project.
+			if passwordDigest != "" && !p.Private {
+				return ErrConflict
+			}
 			result = p
 			return nil
 		}
 		if op.State != "pending" || !s.now().Before(op.ExpiresAt) || p.PendingOperation != op.ID || p.Revision != op.BaseRevision {
+			return ErrConflict
+		}
+		if passwordDigest != "" && (!op.New || p.PolicyRevision == math.MaxInt64 || passwordRevision != p.PolicyRevision+1) {
 			return ErrConflict
 		}
 		idx, err := raftRead[digestRecord](tx, s.raftRef("digests", op.Digest))
@@ -247,6 +268,10 @@ func (s *RaftRepository) Activate(ctx context.Context, a Actor, opID string) (Pr
 			}
 		}
 		p.ActiveDigest, p.ActiveBytes, p.Status, p.PendingOperation = op.Digest, op.Bytes, "active", ""
+		if passwordDigest != "" {
+			p.Private, p.PasswordDigest, p.PasswordRevision = true, passwordDigest, passwordRevision
+			p.PolicyRevision++
+		}
 		if op.New {
 			p.CreatedAt = s.now()
 			if p.Owner.Kind == "anonymous" {

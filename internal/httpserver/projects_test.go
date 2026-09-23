@@ -272,3 +272,30 @@ func TestFirestoreProjectHTTP(t *testing.T) {
 		t.Fatal(w.Body.String())
 	}
 }
+
+func TestPrivatePasswordHeader(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		values  []string
+		secret  string
+		private bool
+		ok      bool
+	}{
+		{"absent", nil, "", false, true},
+		{"utf8", []string{"Y29ycmVjdCBob3JzZSDwn5Sl"}, "correct horse 🔥", true, true},
+		{"padded", []string{"YWJj="}, "", false, false},
+		{"duplicate", []string{"YWJj", "YWJj"}, "", false, false},
+		{"empty", []string{""}, "", false, false},
+		{"not utf8", []string{"_w"}, "", false, false},
+		{"oversized", []string{strings.Repeat("A", 2049)}, "", false, false},
+	} {
+		r := httptest.NewRequest("POST", "/api/projects", nil)
+		for _, value := range tc.values {
+			r.Header.Add("X-Drop-Password", value)
+		}
+		secret, private, err := privatePassword(r)
+		if (err == nil) != tc.ok || secret != tc.secret || private != tc.private {
+			t.Fatal(tc.name, secret, private, err)
+		}
+	}
+}

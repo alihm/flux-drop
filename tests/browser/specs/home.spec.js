@@ -26,7 +26,7 @@ test('publishing uses CSRF and a stable retry key and renders a safe success lin
   });
   await page.goto('/');await expect(page.locator('#status')).toContainText('Choose a site');
   await page.locator('#files').setInputFiles({name:'index.html',mimeType:'text/html',buffer:Buffer.from('<h1>Hello</h1>')});
-  await page.getByLabel('Project name').fill('my-site');
+  await page.getByLabel('Site name').fill('my-site');
   await page.getByRole('button',{name:'Publish site'}).click();
   await expect(page.locator('#status')).toContainText('could not be confirmed');
   await page.getByRole('button',{name:'Publish site'}).click();
@@ -76,7 +76,7 @@ test('folder paths survive upload and duplicate content shows the existing link'
   await expect(page.locator('#selection')).toContainText('2 files');
   await page.getByRole('button',{name:'Publish site'}).click();
   await expect(page.locator('#project-link')).toHaveAttribute('href','/existing-abcdef/');
-  await expect(page.locator('#status')).toContainText('No duplicate project was created');
+  await expect(page.locator('#status')).toContainText('No duplicate site was created');
 });
 
 test('dragging a folder keeps nested paths across directory-reader batches',async({page})=>{
@@ -113,7 +113,7 @@ test('mobile upload stays within the viewport and reveals naming after selection
   await page.locator('#files').setInputFiles({name:'index.html',mimeType:'text/html',buffer:Buffer.from('<h1>Small site</h1>')});
   await expect(page.locator('#selection-stage')).toBeVisible();
   await expect(page.locator('#drop-title')).toHaveText('Change your files');
-  await expect(page.getByLabel('Project name')).toBeVisible();
+  await expect(page.getByLabel('Site name')).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 

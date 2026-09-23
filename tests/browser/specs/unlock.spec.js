@@ -10,8 +10,8 @@ test('unlock UI bootstraps CSRF, submits privately and navigates to the fixed pr
   await page.route('**/example-abcdef/',route => route.fulfill({contentType:'text/html',body:'<h1>Unlocked fixture</h1>'}));
   const response = await page.goto('/unlock/example-abcdef?next=https://attacker.invalid');
   expect(response.headers()['content-security-policy']).not.toContain('unsafe-inline');
-  await page.getByLabel('Project password').fill('a long secret password');
-  await page.getByRole('button',{name:'Unlock project'}).click();
+  await page.getByLabel('Site password').fill('a long secret password');
+  await page.getByRole('button',{name:'Unlock site'}).click();
   await expect(page).toHaveURL('https://localhost:18443/example-abcdef/');
   expect(submitted.headers['x-csrf-token']).toBe('test-csrf');
   expect(submitted.headers.origin).toBe('https://localhost:18443');
@@ -25,11 +25,11 @@ test('unlock UI clears passwords on denial and rate limiting without redirecting
   await page.goto('/unlock/example-abcdef');
   for(const status of [403,429]) {
     code=status;
-    await page.getByLabel('Project password').fill('a long secret password');
-    await page.getByRole('button',{name:'Unlock project'}).click();
+    await page.getByLabel('Site password').fill('a long secret password');
+    await page.getByRole('button',{name:'Unlock site'}).click();
     await expect(page.getByRole('status')).toContainText(status===403?'Unable to unlock':'Too many attempts');
-    await expect(page.getByLabel('Project password')).toHaveValue('');
-    await expect(page.getByRole('button',{name:'Unlock project'})).toBeEnabled();
+    await expect(page.getByLabel('Site password')).toHaveValue('');
+    await expect(page.getByRole('button',{name:'Unlock site'})).toBeEnabled();
     await expect(page).toHaveURL('https://localhost:18443/unlock/example-abcdef');
   }
 });

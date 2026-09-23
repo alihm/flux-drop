@@ -24,7 +24,7 @@ func TestUnlockPage(t *testing.T) {
 			if tc.method == "HEAD" && w.Body.Len() != 0 {
 				t.Fatal("HEAD body")
 			}
-			if tc.method == "GET" && !strings.Contains(w.Body.String(), "Project password") {
+			if tc.method == "GET" && !strings.Contains(w.Body.String(), "Site password") {
 				t.Fatal("missing form")
 			}
 		}

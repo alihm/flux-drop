@@ -17,10 +17,10 @@ test('rename uses the current revision and stops stale mutations',async({page})=
     const headers=await req.allHeaders();expect(headers['if-match']).toBe('"1"');expect(headers['x-csrf-token']).toBe('manage-csrf');calls++;
     state.project.revision=2;await route.fulfill({status:409,json:{error:'revision_conflict'}});
   });
-  await open(page);await page.getByRole('button',{name:'Settings',exact:true}).click();await page.getByLabel('New project name').fill('renamed');await page.getByRole('button',{name:'Rename',exact:true}).click();
-  await expect(page.locator('.management-status')).toContainText('refresh your projects');
+  await open(page);await page.getByRole('button',{name:'Settings',exact:true}).click();await page.getByLabel('New site name').fill('renamed');await page.getByRole('button',{name:'Rename',exact:true}).click();
+  await expect(page.locator('.management-status')).toContainText('refresh your sites');
   await expect(page.getByRole('button',{name:'Rename',exact:true})).toBeDisabled();expect(calls).toBe(1);
-  await page.getByRole('button',{name:'Close project settings'}).click();await page.getByRole('button',{name:'Refresh',exact:true}).click();await page.getByRole('button',{name:'Manage',exact:true}).click();await page.getByRole('button',{name:'Settings',exact:true}).click();
+  await page.getByRole('button',{name:'Close site settings'}).click();await page.getByRole('button',{name:'Refresh',exact:true}).click();await page.getByRole('button',{name:'Manage',exact:true}).click();await page.getByRole('button',{name:'Settings',exact:true}).click();
   await expect(page.getByRole('button',{name:'Rename',exact:true})).toBeEnabled();
 });
 
@@ -35,10 +35,10 @@ test('privacy controls submit the password without rendering it and delete requi
   });
   await open(page);await page.getByRole('button',{name:'Access',exact:true}).click();await page.getByLabel('Password for private access').fill('a long private password');await page.getByRole('button',{name:'Make private',exact:true}).click();
   await expect(page.locator('.project-card')).toContainText('Private');await page.getByRole('button',{name:'Manage',exact:true}).click();await page.getByRole('button',{name:'Access',exact:true}).click();
-  await expect(page.getByLabel('New project password')).toHaveValue('');
+  await expect(page.getByLabel('New site password')).toHaveValue('');
   await page.getByRole('button',{name:'Settings',exact:true}).click();
-  await page.getByRole('button',{name:'Delete project',exact:true}).click();await expect(page.locator('.management-status')).toContainText('exact project URL name');expect(deletions).toBe(0);
-  await page.getByLabel('Type the full project URL name to confirm').fill('site-abcdef');await page.getByRole('button',{name:'Delete project',exact:true}).click();
+  await page.getByRole('button',{name:'Delete site',exact:true}).click();await expect(page.locator('.management-status')).toContainText('exact site URL name');expect(deletions).toBe(0);
+  await page.getByLabel('Type the full site URL name to confirm').fill('site-abcdef');await page.getByRole('button',{name:'Delete site',exact:true}).click();
   await expect(page.locator('#projects')).toBeHidden();expect(deletions).toBe(1);
 });
 

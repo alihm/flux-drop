@@ -21,8 +21,8 @@
         body: JSON.stringify({slug, password: input.value})
       });
       input.value = "";
-      if (!response.ok) throw new Error(response.status === 429 ? "Too many attempts. Wait a minute and try again." : response.status === 403 ? "Unable to unlock. Check the password and try again." : "This project is temporarily unavailable. Please try again later.");
-      status.textContent = "Unlocked. Opening project…";
+      if (!response.ok) throw new Error(response.status === 429 ? "Too many attempts. Wait a minute and try again." : response.status === 403 ? "Unable to unlock. Check the password and try again." : "This site is temporarily unavailable. Please try again later.");
+      status.textContent = "Unlocked. Opening site…";
       window.location.assign("/" + slug + "/");
     } catch (error) {
       input.value = "";

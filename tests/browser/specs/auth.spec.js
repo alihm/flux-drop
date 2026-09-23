@@ -29,10 +29,10 @@ test('Google exchange rotates CSRF before claiming and logout requires confirmat
   });
   await page.route('**/api/auth/logout',async r=>{logout++;expect((await r.request().allHeaders())['x-csrf-token']).toBe('rotated');await r.fulfill({json:{csrfToken:'new-anonymous',authenticated:false}});});
   await page.goto(`/?claim=${id}#projects`);
-  await expect(page.getByRole('button',{name:'Keep this project'})).toBeVisible();expect(claimed).toBe(false);
-  await page.getByRole('button',{name:'Keep this project'}).click();
+  await expect(page.getByRole('button',{name:'Keep this site'})).toBeVisible();expect(claimed).toBe(false);
+  await page.getByRole('button',{name:'Keep this site'}).click();
   await expect(page.getByRole('button',{name:'Sign out',exact:true})).toBeVisible();
-  await expect(page.getByRole('button',{name:'Keep this project'})).toHaveCount(0);expect(claimed).toBe(true);
+  await expect(page.getByRole('button',{name:'Keep this site'})).toHaveCount(0);expect(claimed).toBe(true);
   page.once('dialog',d=>d.dismiss());await page.getByRole('button',{name:'Sign out',exact:true}).click();expect(logout).toBe(0);
   page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'Sign out',exact:true}).click();
   await expect(page.locator('#auth-status')).toContainText('new anonymous session');expect(logout).toBe(1);
