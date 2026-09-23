@@ -12,6 +12,23 @@
   --data-binary @index.html</code></pre>
   <p>For a ZIP, use <code>Content-Type: application/zip</code> and <code>--data-binary @site.zip</code>. For a folder, send multipart fields named <code>files</code> with relative filenames and an <code>index.html</code> at the root. The response contains <code>path</code>; prepend this service’s origin to share the URL. The site belongs to the key owner immediately and does not expire.</p>
   <p>Send <code>X-Drop-Password: BASE64URL_UTF8_PASSWORD</code> to publish a private self-contained HTML page. Passwords must have at least 12 characters. Never put a password or API key in a URL.</p></section>
+  <section><h2>Use the bundled MCP server</h2><p>The same Docker image includes <code>drop-mcp</code>, a local stdio MCP server. It offers <code>publish_html</code>, <code>publish_file</code>, and <code>publish_folder</code>. It connects to Flux Drop over HTTPS; it does not open another inbound port. Create an API key above, save it in a file readable only by your user, and mount that file read-only. Replace the paths, origin, and UID/GID below with yours.</p>
+<pre><code>{
+  "mcpServers": {
+    "flux-drop": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "--user", "YOUR_UID:YOUR_GID",
+        "-v", "/absolute/path/to/drop-key:/run/secrets/drop-api-key:ro",
+        "-v", "/absolute/path/to/sites:/workspace:ro",
+        "-e", "DROP_MCP_ORIGIN=https://YOUR-DROP-ORIGIN",
+        "-e", "DROP_MCP_API_KEY_FILE=/run/secrets/drop-api-key",
+        "-e", "DROP_MCP_ROOT=/workspace",
+        "--entrypoint", "/usr/local/bin/drop-mcp",
+        "alihmahdavi/flux-drop:staging"]
+    }
+  }
+}</code></pre>
+  <p>Use <code>publish_html</code> for a generated HTML document. For local files, pass paths relative to <code>DROP_MCP_ROOT</code>; the folder tool requires <code>index.html</code> at the folder root and rejects symlinks, dotfiles, and unsupported paths. The API key is read from the file on each publish, so rotating or revoking it does not require rebuilding the image. Keep the key out of tool arguments and source control.</p></section>
   <section><h2>Publish without an API key</h2><p>Start an anonymous session and keep the returned cookie and CSRF token together. Use a single session across retries. The site expires after 30 days unless the human recipient claims it.</p>
 <pre><code>curl -c cookies.txt -X POST 'https://YOUR-DROP-ORIGIN/api/session' \
   -H 'Origin: https://YOUR-DROP-ORIGIN'

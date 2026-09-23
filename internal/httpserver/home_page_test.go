@@ -37,7 +37,7 @@ func TestAgentGuide(t *testing.T) {
 		if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" || !strings.Contains(w.Header().Get("Content-Security-Policy"), "style-src 'sha256-") {
 			t.Fatal(method, w.Code, w.Header())
 		}
-		if method == "GET" && (!strings.Contains(w.Body.String(), "api/agent/projects") || !strings.Contains(w.Body.String(), "claimURL")) {
+		if method == "GET" && (!strings.Contains(w.Body.String(), "api/agent/projects") || !strings.Contains(w.Body.String(), "claimURL") || !strings.Contains(w.Body.String(), "drop-mcp") || !strings.Contains(w.Body.String(), "publish_folder")) {
 			t.Fatal("missing agent instructions")
 		}
 		if method == "HEAD" && w.Body.Len() != 0 {
