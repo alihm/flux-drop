@@ -1,5 +1,4 @@
-// Package httpserver owns the public API boundary. Publication is intentionally
-// disabled until the authoritative storage and authorization layers are wired.
+// Package httpserver owns the public API and project-delivery boundaries.
 package httpserver
 
 import (
@@ -88,7 +87,7 @@ func NewWithDependencies(c Config, dependencies Dependencies) (http.Handler, err
 			ProjectDeliveryWithAccess(dependencies.Projects.Repository, dependencies.Projects.DataRoot, dependencies.Fallback, privateAccess).ServeHTTP(w, r)
 			return
 		}
-		respond(w, http.StatusServiceUnavailable, map[string]string{"error": "not_available", "message": "Flux Drop is under development."})
+		http.NotFound(w, r)
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")

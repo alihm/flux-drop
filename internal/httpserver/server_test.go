@@ -30,7 +30,7 @@ func TestFoundationFailsClosed(t *testing.T) {
 		status int
 	}{
 		{"/healthz", 200}, {"/readyz", 503}, {"/api/config", 200},
-		{"/api/projects", 503}, {"/hello-123456/index.html", 503}, {"/_drop_internal/secret", 503},
+		{"/api/projects", 404}, {"/hello-123456/index.html", 404}, {"/_drop_internal/secret", 404},
 	} {
 		r := httptest.NewRecorder()
 		req := httptest.NewRequest("GET", route.path, nil)

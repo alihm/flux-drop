@@ -78,7 +78,7 @@ func NewPeerClient(config *tls.Config) (*http.Client, error) {
 		MaxResponseHeaderBytes: 16 << 10, MaxIdleConns: 16, MaxIdleConnsPerHost: 2,
 		MaxConnsPerHost: 4, IdleConnTimeout: 30 * time.Second, DisableCompression: true,
 	}
-	return &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("peer redirects forbidden") }}, nil
+	return &http.Client{Transport: transport, Timeout: 5 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("peer redirects forbidden") }}, nil
 }
 
 // PeerBoundary must wrap a local-only handler on the separate TLS listener.
@@ -112,7 +112,16 @@ var peerSlug = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?-[a-f0-9
 
 func validatePeerPath(u *url.URL) error {
 	const prefix = "/_drop_peer/content/"
-	if u.RawQuery != "" || u.ForceQuery || u.EscapedPath() != (&url.URL{Path: u.Path}).EscapedPath() || strings.ContainsAny(u.Path, "%\\") || !strings.HasPrefix(u.Path, prefix) || len(u.Path) > 1200 {
+	if u.RawQuery != "" || u.ForceQuery || u.EscapedPath() != (&url.URL{Path: u.Path}).EscapedPath() || strings.ContainsAny(u.Path, "%\\") || len(u.Path) > 1200 {
+		return fmt.Errorf("invalid peer path")
+	}
+	if slug, ok := strings.CutPrefix(u.Path, "/_drop_peer/manifest/"); ok {
+		if peerSlug.MatchString(slug) {
+			return nil
+		}
+		return fmt.Errorf("invalid peer path")
+	}
+	if !strings.HasPrefix(u.Path, prefix) {
 		return fmt.Errorf("invalid peer path")
 	}
 	slug, file, ok := strings.Cut(strings.TrimPrefix(u.Path, prefix), "/")

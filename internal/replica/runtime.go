@@ -205,7 +205,7 @@ func startRuntime(parent context.Context, c RuntimeConfig, repository Resolver, 
 	}
 	ctx, cancel := context.WithCancel(parent)
 	r := &Runtime{Discovery: discovery, Fallback: fallback, cancel: cancel, workerDone: make(chan struct{}), serveDone: make(chan error, 1)}
-	r.server = &http.Server{Handler: LocalDelivery(c.App, repository, dataRoot), TLSConfig: serverTLS, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 35 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10, BaseContext: func(net.Listener) context.Context { return ctx }}
+	r.server = &http.Server{Handler: LocalDelivery(c.App, repository, dataRoot), TLSConfig: serverTLS, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 310 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10, BaseContext: func(net.Listener) context.Context { return ctx }}
 	go func() { defer close(r.workerDone); discovery.Run(ctx) }()
 	go func() { r.serveDone <- r.server.ServeTLS(listener, "", "") }()
 	return r, nil

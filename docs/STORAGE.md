@@ -1,8 +1,9 @@
 # Local storage admission
 
-Every new upload and content replacement now acquires a shared per-handler disk
-reservation after session/CSRF validation and before reading the request body.
-This supplements the four-upload concurrency limit and Firestore project counts.
+Every new upload and content replacement acquires disk reservations on both the
+replicated content volume and node-local staging volume after session/CSRF
+validation and before reading the request body. This supplements the four-upload
+concurrency limit and Raft project counts.
 
 The Linux filesystem probe uses available blocks (not privileged reserved blocks).
 Admission keeps at least 1 GiB free and, where inode accounting is supported,
@@ -28,9 +29,9 @@ exist on the intended writable volume; this guard never creates a missing mount.
 Tests cover concurrent reservations, idempotent release, byte/inode exhaustion,
 probe failures, filesystems without inode accounting, and authenticated HTTP
 rejection before reading the upload body. Real disk-full installation and
-replication stress testing remain outstanding. Public publishing remains disabled
-by default. Protected staging publication can now be enabled as described in
-STAGING.md; the safeguards above remain in force.
+replication stress testing remain outstanding. Public publishing is enabled by
+default in the passphrase-provisioned image; optional protected staging is
+described in STAGING.md. The safeguards above remain in force.
 
 ## Persistent owner byte budgets
 

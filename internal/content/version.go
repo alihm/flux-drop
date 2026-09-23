@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 )
 
 var versionDigestRE = regexp.MustCompile(`^[a-f0-9]{64}$`)
@@ -48,38 +50,13 @@ func VerifyVersion(directory, digest string) (Manifest, error) {
 	if len(data) > 8<<20 {
 		return Manifest{}, ErrLimit
 	}
-	var manifest Manifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return Manifest{}, ErrInvalid
-	}
-	canonical, err := json.Marshal(manifest)
+	manifest, err := ParseManifest(data, digest)
 	if err != nil {
 		return Manifest{}, err
 	}
-	computed := sha256.Sum256(canonical)
-	if hex.EncodeToString(computed[:]) != digest || manifest.Schema != 1 || len(manifest.Files) == 0 || len(manifest.Files) > 5000 {
-		return Manifest{}, ErrInvalid
-	}
 	expected := make(map[string]File, len(manifest.Files))
-	var total int64
-	previous := ""
-	hasIndex := false
 	for _, item := range manifest.Files {
-		if validateFile(item.Path) != nil || item.Path <= previous || item.Size < 0 || item.Size > 200<<20 || !versionDigestRE.MatchString(item.SHA256) {
-			return Manifest{}, ErrInvalid
-		}
-		total += item.Size
-		if total > 200<<20 {
-			return Manifest{}, ErrLimit
-		}
-		previous = item.Path
 		expected["public/"+item.Path] = item
-		if item.Path == "index.html" {
-			hasIndex = true
-		}
-	}
-	if !hasIndex {
-		return Manifest{}, ErrInvalid
 	}
 	seen := 0
 	err = fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
@@ -137,9 +114,49 @@ func VerifyVersion(directory, digest string) (Manifest, error) {
 	return manifest, nil
 }
 
+// ParseManifest authenticates a peer manifest against the metadata digest.
+// It does not imply that any file bytes match; callers must check those too.
+func ParseManifest(data []byte, digest string) (Manifest, error) {
+	if len(data) > 8<<20 || !versionDigestRE.MatchString(digest) {
+		return Manifest{}, ErrInvalid
+	}
+	var manifest Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return Manifest{}, ErrInvalid
+	}
+	canonical, err := json.Marshal(manifest)
+	if err != nil {
+		return Manifest{}, err
+	}
+	hash := sha256.Sum256(canonical)
+	if hex.EncodeToString(hash[:]) != digest || manifest.Schema != 1 || len(manifest.Files) == 0 || len(manifest.Files) > 5000 {
+		return Manifest{}, ErrInvalid
+	}
+	var total int64
+	previous := ""
+	hasIndex := false
+	for _, file := range manifest.Files {
+		if validateFile(file.Path) != nil || file.Path <= previous || file.Size < 0 || file.Size > 200<<20 || !versionDigestRE.MatchString(file.SHA256) {
+			return Manifest{}, ErrInvalid
+		}
+		total += file.Size
+		if total > 200<<20 {
+			return Manifest{}, ErrLimit
+		}
+		previous = file.Path
+		if file.Path == "index.html" {
+			hasIndex = true
+		}
+	}
+	if !hasIndex {
+		return Manifest{}, ErrInvalid
+	}
+	return manifest, nil
+}
+
 // Install moves an owned staging tree into its immutable content-addressed
-// location. Both roots must be on the same filesystem. It does not activate
-// metadata; the caller does that only after this method succeeds.
+// location. Cross-filesystem staging is copied and verified before the final
+// rename on the destination filesystem. Metadata is activated afterward.
 func (s *Staged) Install(dataRoot, projectID, slug string) error {
 	return s.install(dataRoot, projectID, slug, "versions", s.Digest)
 }
@@ -169,7 +186,8 @@ func (s *Staged) install(dataRoot, projectID, slug, namespace, versionID string)
 	if s.ownedDirectory == "" || s.Directory != s.ownedDirectory || !projectIDRE.MatchString(projectID) || !markerRE.MatchString(slug) {
 		return ErrInvalid
 	}
-	if _, err := VerifyVersion(s.Directory, s.Digest); err != nil {
+	manifest, err := VerifyVersion(s.Directory, s.Digest)
+	if err != nil {
 		return err
 	}
 	projectDir := filepath.Join(dataRoot, "projects", projectID)
@@ -222,8 +240,12 @@ func (s *Staged) install(dataRoot, projectID, slug, namespace, versionID string)
 	} else if !os.IsNotExist(err) {
 		return err
 	} else if err := os.Rename(s.Directory, destination); err != nil {
-		// Another retry may have installed identical content concurrently.
-		if _, verifyErr := VerifyVersion(destination, s.Digest); verifyErr != nil {
+		if errors.Is(err, syscall.EXDEV) {
+			if err := s.copyAcrossFilesystems(versions, destination, manifest); err != nil {
+				return err
+			}
+		} else if _, verifyErr := VerifyVersion(destination, s.Digest); verifyErr != nil {
+			// Another retry may have installed identical content concurrently.
 			return err
 		}
 	} else {
@@ -234,6 +256,67 @@ func (s *Staged) install(dataRoot, projectID, slug, namespace, versionID string)
 	}
 	for _, directory := range []string{destination, versions, projectDir, filepath.Dir(projectDir), dataRoot} {
 		if err := syncPath(directory); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// copyAcrossFilesystems prepares a complete version on the replicated filesystem
+// before the final atomic rename. The source remains node-local and is discarded
+// by the publisher once installation finishes.
+func (s *Staged) copyAcrossFilesystems(versions, destination string, manifest Manifest) error {
+	temporary, err := os.MkdirTemp(versions, ".install-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(temporary)
+	root, err := os.OpenRoot(s.Directory)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	copyOne := func(name string) error {
+		in, err := root.Open(name)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		path := filepath.Join(temporary, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			return err
+		}
+		out, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(out, in)
+		syncErr := out.Sync()
+		closeErr := out.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if syncErr != nil {
+			return syncErr
+		}
+		return closeErr
+	}
+	if err := copyOne("manifest.json"); err != nil {
+		return err
+	}
+	for _, file := range manifest.Files {
+		if err := copyOne("public/" + file.Path); err != nil {
+			return err
+		}
+	}
+	if _, err := VerifyVersion(temporary, s.Digest); err != nil {
+		return err
+	}
+	if err := syncTree(temporary); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary, destination); err != nil {
+		if _, verifyErr := VerifyVersion(destination, s.Digest); verifyErr != nil {
 			return err
 		}
 	}

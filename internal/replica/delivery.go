@@ -48,8 +48,12 @@ func LocalDelivery(app string, repository Resolver, dataRoot string) http.Handle
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
+		manifestRequest := strings.HasPrefix(r.URL.Path, "/_drop_peer/manifest/")
 		slug, file, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/_drop_peer/content/"), "/")
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		if manifestRequest {
+			slug = strings.TrimPrefix(r.URL.Path, "/_drop_peer/manifest/")
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 		defer cancel()
 		p, err := repository.Resolve(ctx, slug)
 		if err != nil {
@@ -77,6 +81,33 @@ func LocalDelivery(app string, repository Resolver, dataRoot string) http.Handle
 		if err != nil {
 			// An incomplete/corrupt version is not proof of global absence.
 			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		if manifestRequest {
+			root, err := os.OpenRoot(directory)
+			if err != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			defer root.Close()
+			file, err := root.Open("manifest.json")
+			if err != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			data, err := io.ReadAll(io.LimitReader(file, (8<<20)+1))
+			file.Close()
+			if err != nil || len(data) > 8<<20 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Drop-Content-Digest", digest)
+			w.Header().Set("X-Drop-Policy-Revision", strconv.FormatInt(policy, 10))
+			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+			if r.Method == http.MethodGet {
+				_, _ = w.Write(data)
+			}
 			return
 		}
 		var selected *content.File

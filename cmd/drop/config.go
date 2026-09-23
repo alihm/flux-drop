@@ -56,7 +56,7 @@ func publishingFromEnv(get func(string) string) (publishingConfig, error) {
 	return c, nil
 }
 
-func validateStorage(c publishingConfig, credential string) error {
+func validateStorage(c publishingConfig) error {
 	info, err := os.Lstat(c.root)
 	if err != nil {
 		return err
@@ -64,19 +64,17 @@ func validateStorage(c publishingConfig, credential string) error {
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("data root must be an existing real directory")
 	}
-	if credential != "" {
-		data, err := filepath.EvalSymlinks(c.root)
-		if err != nil {
-			return err
-		}
-		secret, err := filepath.EvalSymlinks(credential)
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(data, secret)
-		if err != nil || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))) {
-			return errors.New("Firebase credentials must be outside replicated data")
-		}
-	}
 	return nil
+}
+
+func sessionCreationBudget(get func(string) string) (int64, error) {
+	raw := get("DROP_SESSION_CREATIONS_PER_MINUTE")
+	if raw == "" {
+		return 60, nil
+	}
+	budget, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || budget < 1 || budget > 10000 {
+		return 0, errors.New("invalid DROP_SESSION_CREATIONS_PER_MINUTE")
+	}
+	return budget, nil
 }

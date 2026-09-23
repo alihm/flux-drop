@@ -37,11 +37,16 @@ or route private cluster endpoints through public Nginx.
 | Persistent volume | Replication |
 |---|---|
 | `/data` — immutable project content and deployment-existence marker | Enabled |
-| `/var/lib/drop-cluster` — ALL node-local configuration, identity, keys, journal, Raft log/snapshots and observations | Disabled |
+| `/var/lib/drop-cluster` — ALL node-local configuration, identity, keys, journal, Raft log/snapshots, observations and upload staging | Disabled |
 
 The operator configures Flux replication exclusions. Both roots need mode 0700 and
 ownership UID/GID 65534; fresh Docker volumes inherit the image's directory ownership.
-Keep `/tmp` writable. Never copy a node-local volume to another running replica.
+Size the node-local volume for uploads as well as Raft state: the default upload
+limits reserve roughly 700 MiB per active upload plus 1 GiB free-space headroom.
+Keep `/tmp` writable and allow up to 200 MiB per concurrent peer fallback for
+temporary, verified response spooling. Upload staging is node-local; a brief
+`.install-*` copy inside `/data` is verified before atomic publication and
+removed after failure. Never copy a node-local volume to another running replica.
 Allow 25 seconds for shutdown. No secret/config volume or per-instance commands
 are required.
 

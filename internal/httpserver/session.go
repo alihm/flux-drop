@@ -21,6 +21,7 @@ type Dependencies struct {
 	Fallback    ProjectFallback
 	FirebaseWeb *FirebaseWebConfig
 	Readiness   func(context.Context) error
+	StagingRoot string
 }
 
 func registerSessions(mux *http.ServeMux, origin string, service *session.Service) {
@@ -39,12 +40,34 @@ func registerSessions(mux *http.ServeMux, origin string, service *session.Servic
 			return
 		}
 		if err != nil {
-			sessionError(w, err)
+			if !errors.Is(err, session.ErrUnauthorized) {
+				sessionError(w, err)
+				return
+			}
+			// A malformed or revoked browser token cannot be repaired by refresh.
+			// Replace it only on this explicit bootstrap endpoint.
+			token, view, createErr := service.Create(ctx)
+			if createErr != nil {
+				sessionError(w, createErr)
+				return
+			}
+			setSessionCookie(w, token, view.Record.ExpiresAt)
+			sessionResponse(w, view)
 			return
 		}
 		view, err := service.Read(ctx, token)
 		if err != nil {
-			sessionError(w, err)
+			if !errors.Is(err, session.ErrUnauthorized) {
+				sessionError(w, err)
+				return
+			}
+			token, view, createErr := service.Create(ctx)
+			if createErr != nil {
+				sessionError(w, createErr)
+				return
+			}
+			setSessionCookie(w, token, view.Record.ExpiresAt)
+			sessionResponse(w, view)
 			return
 		}
 		sessionResponse(w, view)

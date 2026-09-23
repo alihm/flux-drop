@@ -1,10 +1,10 @@
 # Transactional publishing backend
 
-Implemented and tested: Firestore project transactions, durable immutable file
+Implemented and tested: Raft-backed project transactions, durable immutable file
 installation, upload/list/get/claim/update/delete handlers, and expired-reservation
-recovery. The product entrypoint now wires the Publisher when
-`DROP_PUBLISHING_ENABLED=true` and valid Firebase, storage and staging credentials
-are configured. It remains disabled by default. See [STAGING.md](STAGING.md).
+recovery. Passphrase-provisioned Flux deployments enable publishing by default;
+the isolated Firestore emulator backend remains for regression tests. See
+[FLUX_DEPLOYMENT.md](FLUX_DEPLOYMENT.md) for the production configuration.
 
 The handlers can be exercised through the Firestore integration suite without
 production credentials. Google identity is mocked there; session/project writes
@@ -40,8 +40,9 @@ hyphens; scope is the current anonymous or Firebase owner identity.
 
 Responses contain `project`, project `path`, and a management `claimPath`, with a
 quoted revision ETag. A claim path conveys no ownership credential. Mutations on
-existing projects require the last known revision in If-Match; missing/invalid
-headers return 428 and stale revisions return 409.
+existing projects require the last known revision in If-Match; a missing header
+returns 428, malformed or duplicate headers return 400, and stale revisions
+return 409.
 
 Lists include both the current browser's unclaimed projects and authenticated UID
 projects. Pagination scans at most 50 records. Expired/reserved/deleted records

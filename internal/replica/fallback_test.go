@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -93,5 +95,50 @@ func TestFallbackFailureSelection(t *testing.T) {
 				t.Fatal("stale peers contacted")
 			}
 		})
+	}
+}
+
+func TestFallbackRejectsTamperedPeerBytes(t *testing.T) {
+	root := t.TempDir()
+	staged, err := content.StageHTML(root, strings.NewReader("good"), content.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer staged.Discard()
+	manifest, err := os.ReadFile(filepath.Join(staged.Directory, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := project.Project{Slug: "site-" + staged.Digest[:6], ActiveDigest: staged.Digest, Status: "active", PolicyRevision: 1}
+	address := netip.MustParseAddrPort("91.192.45.220:8444")
+	f := &Fallback{source: peers{[]netip.AddrPort{address}, true}, slots: make(chan struct{}, 1), client: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		body := "bad!"
+		if strings.Contains(r.URL.Path, "/manifest/") {
+			body = string(manifest)
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), ContentLength: int64(len(body)), Header: http.Header{"X-Drop-Content-Digest": []string{p.ActiveDigest}, "X-Drop-Policy-Revision": []string{"1"}}}, nil
+	})}}
+	w := httptest.NewRecorder()
+	f.ServeProject(w, httptest.NewRequest("GET", "/", nil), p, "index.html")
+	if w.Code != 503 || w.Body.Len() != 0 {
+		t.Fatalf("tampered content escaped: %d %q", w.Code, w.Body.String())
+	}
+}
+
+func TestFallbackDoesNotCallUntriedPeersAbsent(t *testing.T) {
+	p := project.Project{Slug: "site-abcdef", ActiveDigest: strings.Repeat("a", 64), Status: "active", PolicyRevision: 1}
+	addresses := []netip.AddrPort{
+		netip.MustParseAddrPort("91.192.45.220:8444"), netip.MustParseAddrPort("74.103.5.187:8444"),
+		netip.MustParseAddrPort("91.192.45.221:8444"), netip.MustParseAddrPort("74.103.5.188:8444"),
+	}
+	calls := 0
+	f := &Fallback{source: peers{addresses, true}, slots: make(chan struct{}, 1), client: &http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{StatusCode: 404, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}}, nil
+	})}}
+	w := httptest.NewRecorder()
+	f.ServeProject(w, httptest.NewRequest("GET", "/", nil), p, "index.html")
+	if w.Code != 503 || calls != 3 {
+		t.Fatalf("untried peer incorrectly treated as absent: %d, %d calls", w.Code, calls)
 	}
 }

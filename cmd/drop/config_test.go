@@ -26,20 +26,13 @@ func TestPublishingConfiguration(t *testing.T) {
 		env[key] = old
 	}
 }
-func TestStorageRejectsReplicatedCredentials(t *testing.T) {
+func TestStorageRejectsSymlinkRoot(t *testing.T) {
 	root := t.TempDir()
-	secret := filepath.Join(root, "credentials.json")
-	if err := os.WriteFile(secret, []byte("test"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateStorage(publishingConfig{root: root}, secret); err == nil {
-		t.Fatal("replicated credentials allowed")
-	}
 	linked := filepath.Join(t.TempDir(), "linked-data")
 	if err := os.Symlink(root, linked); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateStorage(publishingConfig{root: linked}, ""); err == nil {
+	if err := validateStorage(publishingConfig{root: linked}); err == nil {
 		t.Fatal("symlink data root allowed")
 	}
 }
@@ -66,5 +59,18 @@ func TestPublishingDefaults(t *testing.T) {
 	})
 	if err != nil || c.enabled {
 		t.Fatal("explicit disable ignored", err)
+	}
+}
+
+func TestSessionCreationBudget(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int64
+		bad   bool
+	}{{"", 60, false}, {"250", 250, false}, {"0", 0, true}, {"10001", 0, true}, {"nope", 0, true}} {
+		got, err := sessionCreationBudget(func(string) string { return tc.value })
+		if (err != nil) != tc.bad || (!tc.bad && got != tc.want) {
+			t.Fatalf("%q: %d, %v", tc.value, got, err)
+		}
 	}
 }

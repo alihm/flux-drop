@@ -24,7 +24,7 @@ var deliveryDigest = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 // ProjectDelivery authorizes public content before handing it to Nginx. This
 // handler must never be used behind a proxy that ignores X-Accel-Redirect.
-// Private projects fail closed until password grants are implemented.
+// This convenience wrapper has no private grant provider, so private projects fail closed.
 func ProjectDelivery(repository projectResolver, dataRoot string) http.Handler {
 	return ProjectDeliveryWithFallback(repository, dataRoot, nil)
 }

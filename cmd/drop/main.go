@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -50,10 +49,10 @@ func run() error {
 		return err
 	}
 	if publishing.enabled {
-		if err := validateStorage(publishing, os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")); err != nil {
+		if err := validateStorage(publishing); err != nil {
 			return err
 		}
-		if err := httpserver.StorageReady(publishing.root, content.DefaultLimits()); err != nil {
+		if err := httpserver.StorageReady(publishing.root, "/var/lib/drop-cluster/staging", content.DefaultLimits()); err != nil {
 			return fmt.Errorf("storage not ready: %w", err)
 		}
 	}
@@ -103,12 +102,9 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		budget := int64(60)
-		if raw := get("DROP_SESSION_CREATIONS_PER_MINUTE"); raw != "" {
-			budget, err = strconv.ParseInt(raw, 10, 64)
-			if err != nil || budget < 1 || budget > 10000 {
-				return errors.New("invalid DROP_SESSION_CREATIONS_PER_MINUTE")
-			}
+		budget, err := sessionCreationBudget(get)
+		if err != nil {
+			return err
 		}
 		store := &metadata.Store{Backend: client}
 		dependencies.Sessions = &session.Service{Store: &session.RaftStore{Store: store, CreationsPerMinute: budget}, Verifier: verifier}
@@ -119,8 +115,12 @@ func run() error {
 		}
 		if publishing.enabled {
 			dependencies.Projects = &project.Publisher{Repository: projects, DataRoot: publishing.root}
+			dependencies.StagingRoot = "/var/lib/drop-cluster/staging"
+			storageReady := httpserver.CachedReadiness(func(context.Context) error {
+				return httpserver.StorageReady(publishing.root, dependencies.StagingRoot, content.DefaultLimits())
+			})
 			dependencies.Readiness = func(ctx context.Context) error {
-				if err := httpserver.StorageReady(publishing.root, content.DefaultLimits()); err != nil {
+				if err := storageReady(ctx); err != nil {
 					return err
 				}
 				_, err := client.Read(ctx, []string{"health/readiness"})
@@ -128,13 +128,9 @@ func run() error {
 			}
 		}
 	} else if projectID != "" {
-		budget := int64(60)
-		if raw := os.Getenv("DROP_SESSION_CREATIONS_PER_MINUTE"); raw != "" {
-			value, err := strconv.ParseInt(raw, 10, 64)
-			if err != nil || value < 1 || value > 10000 {
-				return errors.New("invalid DROP_SESSION_CREATIONS_PER_MINUTE")
-			}
-			budget = value
+		budget, err := sessionCreationBudget(get)
+		if err != nil {
+			return err
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -156,8 +152,9 @@ func run() error {
 		projects = legacyProjects
 		if publishing.enabled {
 			dependencies.Projects = &project.Publisher{Repository: projects, DataRoot: publishing.root}
+			dependencies.StagingRoot = "/var/lib/drop-cluster/staging"
 			dependencies.Readiness = httpserver.CachedReadiness(func(ctx context.Context) error {
-				if err := httpserver.StorageReady(publishing.root, content.DefaultLimits()); err != nil {
+				if err := httpserver.StorageReady(publishing.root, "/var/lib/drop-cluster/staging", content.DefaultLimits()); err != nil {
 					return err
 				}
 				_, err := store.Collection("drop_projects").Doc("readiness-probe").Get(ctx)
@@ -199,7 +196,7 @@ func run() error {
 	if publishing.enabled && publishing.password != "" {
 		handler = httpserver.StagingAccess(handler, publishing.user, publishing.password)
 	}
-	server := &http.Server{Addr: "127.0.0.1:8081", Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 60 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
+	server := &http.Server{Addr: "127.0.0.1:8081", Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 330 * time.Second, WriteTimeout: 10 * time.Minute, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	defer server.Close()
 	if maintenance != nil {
 		workerContext, cancelWorker := context.WithCancel(ctx)

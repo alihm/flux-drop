@@ -158,8 +158,8 @@ func TestSessionHTTPLoginLogoutAndStaleRequests(t *testing.T) {
 		t.Fatal("csrf not rotated")
 	}
 	stale := call(h, "POST", "/api/session", "https://drop.example.com", old, "", "")
-	if stale.Code != 401 || len(stale.Result().Cookies()) != 0 {
-		t.Fatal("stale request can overwrite rotated cookie")
+	if stale.Code != 200 || len(stale.Result().Cookies()) != 1 || stale.Result().Cookies()[0].Value == old.Value || !strings.Contains(stale.Body.String(), `"authenticated":false`) {
+		t.Fatal("stale session was not replaced with a new anonymous session")
 	}
 	logout := call(h, "POST", "/api/auth/logout", "https://drop.example.com", next, view.CSRF, "")
 	if logout.Code != 200 || !strings.Contains(logout.Body.String(), `"authenticated":false`) {
@@ -167,6 +167,24 @@ func TestSessionHTTPLoginLogoutAndStaleRequests(t *testing.T) {
 	}
 	if call(h, "GET", "/api/session", "", next, "", "").Code != 401 {
 		t.Fatal("logged-out cookie survived")
+	}
+}
+
+func TestSessionBootstrapDoesNotMaskStorageFailure(t *testing.T) {
+	h, store := authServer(t)
+	cookie, _ := bootstrap(t, h)
+	store.unavailable = true
+	w := call(h, "POST", "/api/session", "https://drop.example.com", cookie, "", "")
+	if w.Code == 200 || len(w.Result().Cookies()) != 0 {
+		t.Fatal("storage failure replaced an existing session", w.Code)
+	}
+}
+
+func TestSessionBootstrapRecoversMalformedCookie(t *testing.T) {
+	h, _ := authServer(t)
+	w := call(h, "POST", "/api/session", "https://drop.example.com", &http.Cookie{Name: sessionCookie, Value: "invalid"}, "", "")
+	if w.Code != 200 || len(w.Result().Cookies()) != 1 {
+		t.Fatal("malformed cookie did not recover", w.Code)
 	}
 }
 

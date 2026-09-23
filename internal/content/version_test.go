@@ -38,6 +38,29 @@ func TestInstallVerifiesAndKeepsMetadataPrivate(t *testing.T) {
 	}
 }
 
+func TestCrossFilesystemCopyVerifiesBeforePublication(t *testing.T) {
+	staged, err := StageHTML(t.TempDir(), strings.NewReader("<h1>safe</h1>"), DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer staged.Discard()
+	versions := t.TempDir()
+	destination := filepath.Join(versions, staged.Digest)
+	manifest, err := VerifyVersion(staged.Directory, staged.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := staged.copyAcrossFilesystems(versions, destination, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyVersion(destination, staged.Digest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(staged.Directory); err != nil {
+		t.Fatal("local staging was removed before publisher cleanup", err)
+	}
+}
+
 func TestVersionRejectsIncompleteCorruptAndLinkedFiles(t *testing.T) {
 	for _, attack := range []string{"missing", "corrupt", "extra", "symlink", "manifest"} {
 		t.Run(attack, func(t *testing.T) {

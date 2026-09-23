@@ -17,10 +17,6 @@ func StagingAccess(next http.Handler, user, password string) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
-			next.ServeHTTP(w, r)
-			return
-		}
 		u, p, ok := r.BasicAuth()
 		gotUser, gotPassword := sha256.Sum256([]byte(u)), sha256.Sum256([]byte(p))
 		valid := subtle.ConstantTimeCompare(gotUser[:], wantUser[:]) & subtle.ConstantTimeCompare(gotPassword[:], wantPassword[:])

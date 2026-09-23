@@ -48,6 +48,32 @@ func TestUploadHTTPPreservesFolderPathsAndRejectsTraversal(t *testing.T) {
 	}
 }
 
+func TestIfMatchMissingAndMalformedHaveDifferentStatuses(t *testing.T) {
+	for _, tc := range []struct {
+		values []string
+		want   int
+	}{
+		{nil, 428},
+		{[]string{"not-quoted"}, 400},
+		{[]string{`"0"`}, 400},
+		{[]string{`"1"`, `"2"`}, 400},
+	} {
+		r := httptest.NewRequest("PATCH", "/api/projects/id", nil)
+		for _, value := range tc.values {
+			r.Header.Add("If-Match", value)
+		}
+		_, err := expectedRevision(r)
+		if err == nil {
+			t.Fatalf("accepted %v", tc.values)
+		}
+		w := httptest.NewRecorder()
+		revisionError(w, err)
+		if w.Code != tc.want {
+			t.Fatalf("%v: got %d want %d", tc.values, w.Code, tc.want)
+		}
+	}
+}
+
 func TestUploadHTTPFormatsAndLimits(t *testing.T) {
 	var packed bytes.Buffer
 	zw := zip.NewWriter(&packed)

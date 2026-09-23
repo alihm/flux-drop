@@ -2,18 +2,22 @@ package replica
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"io"
 	"mime"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"sync/atomic"
 	"time"
 
+	"github.com/runonflux/flux-drop/internal/content"
 	"github.com/runonflux/flux-drop/internal/project"
 )
 
@@ -41,9 +45,8 @@ func NewFallback(source PeerSource, config *tls.Config) (*Fallback, error) {
 
 func (f *Fallback) Close() { f.client.CloseIdleConnections() }
 
-// ServeProject streams a public version from at most three discovered peers.
-// Only the version/policy binding is sent: browser credentials and peer-supplied
-// response headers never pass through. No files are cached on disk.
+// ServeProject verifies a public version against its metadata digest before
+// sending any bytes. The temporary spool is removed after each response.
 func (f *Fallback) ServeProject(w http.ResponseWriter, r *http.Request, p project.Project, file string) {
 	if p.Private || !p.Live(time.Now()) || !contentDigest.MatchString(p.ActiveDigest) || p.PolicyRevision < 1 {
 		w.WriteHeader(http.StatusNotFound)
@@ -76,7 +79,7 @@ func (f *Fallback) ServeProject(w http.ResponseWriter, r *http.Request, p projec
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
 	count := len(addresses)
 	if count > 3 {
@@ -89,9 +92,50 @@ func (f *Fallback) ServeProject(w http.ResponseWriter, r *http.Request, p projec
 		if !publicIP(address.Addr().Unmap()) || address.Port() == 0 {
 			continue
 		}
+		manifestURL := &url.URL{Scheme: "https", Host: address.String(), Path: "/_drop_peer/manifest/" + p.Slug}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifestURL.String(), nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("X-Drop-Peer-Hop", "1")
+		req.Header.Set("X-Drop-Content-Digest", p.ActiveDigest)
+		req.Header.Set("X-Drop-Policy-Revision", strconv.FormatInt(p.PolicyRevision, 10))
+		manifestResponse, err := f.client.Do(req)
+		if err != nil {
+			continue
+		}
+		if manifestResponse.StatusCode == http.StatusNotFound {
+			absent++
+			manifestResponse.Body.Close()
+			continue
+		}
+		if !validPeerResponse(manifestResponse, p, 8<<20) {
+			manifestResponse.Body.Close()
+			continue
+		}
+		manifestBytes, readErr := io.ReadAll(io.LimitReader(manifestResponse.Body, (8<<20)+1))
+		manifestResponse.Body.Close()
+		if readErr != nil || int64(len(manifestBytes)) != manifestResponse.ContentLength {
+			continue
+		}
+		manifest, err := content.ParseManifest(manifestBytes, p.ActiveDigest)
+		if err != nil {
+			continue
+		}
+		var selected *content.File
+		for i := range manifest.Files {
+			if manifest.Files[i].Path == file {
+				selected = &manifest.Files[i]
+				break
+			}
+		}
+		if selected == nil {
+			absent++
+			continue
+		}
 		u.Scheme = "https"
 		u.Host = address.String()
-		req, err := http.NewRequestWithContext(ctx, r.Method, u.String(), nil)
+		req, err = http.NewRequestWithContext(ctx, r.Method, u.String(), nil)
 		if err != nil {
 			continue
 		}
@@ -102,17 +146,33 @@ func (f *Fallback) ServeProject(w http.ResponseWriter, r *http.Request, p projec
 		if err != nil {
 			continue
 		}
-		if res.StatusCode == http.StatusNotFound {
-			absent++
+		if !validPeerResponse(res, p, 200<<20) || res.ContentLength != selected.Size {
 			res.Body.Close()
 			continue
 		}
-		valid := res.StatusCode == http.StatusOK && res.ContentLength >= 0 && res.ContentLength <= 200<<20 && res.Header.Get("Content-Encoding") == "" &&
-			len(res.Header.Values("X-Drop-Content-Digest")) == 1 && res.Header.Get("X-Drop-Content-Digest") == p.ActiveDigest &&
-			len(res.Header.Values("X-Drop-Policy-Revision")) == 1 && res.Header.Get("X-Drop-Policy-Revision") == strconv.FormatInt(p.PolicyRevision, 10)
-		if !valid {
+		var spool *os.File
+		if r.Method == http.MethodGet {
+			spool, err = os.CreateTemp("", "drop-fallback-")
+			if err != nil {
+				res.Body.Close()
+				continue
+			}
+			hash := sha256.New()
+			n, copyErr := io.Copy(io.MultiWriter(spool, hash), io.LimitReader(res.Body, selected.Size+1))
 			res.Body.Close()
-			continue
+			if copyErr != nil || n != selected.Size || hex.EncodeToString(hash.Sum(nil)) != selected.SHA256 || spool.Sync() != nil {
+				spool.Close()
+				os.Remove(spool.Name())
+				continue
+			}
+			if _, err := spool.Seek(0, io.SeekStart); err != nil {
+				spool.Close()
+				os.Remove(spool.Name())
+				continue
+			}
+			defer func() { spool.Close(); os.Remove(spool.Name()) }()
+		} else {
+			res.Body.Close()
 		}
 		// Public fallback deliberately ignores ranges/validators and returns a
 		// complete 200 response. This avoids mixing Nginx and peer ETag formats.
@@ -121,7 +181,7 @@ func (f *Fallback) ServeProject(w http.ResponseWriter, r *http.Request, p projec
 			kind = "application/octet-stream"
 		}
 		w.Header().Set("Content-Type", kind)
-		w.Header().Set("Content-Length", strconv.FormatInt(res.ContentLength, 10))
+		w.Header().Set("Content-Length", strconv.FormatInt(selected.Size, 10))
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Security-Policy", "sandbox allow-scripts; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -131,11 +191,9 @@ func (f *Fallback) ServeProject(w http.ResponseWriter, r *http.Request, p projec
 		w.Header().Set("Accept-Ranges", "none")
 		w.WriteHeader(http.StatusOK)
 		if r.Method == http.MethodHead {
-			res.Body.Close()
 			return
 		}
-		_, err = io.CopyN(w, res.Body, res.ContentLength)
-		res.Body.Close()
+		_, err = io.Copy(w, spool)
 		if err != nil {
 			panic(http.ErrAbortHandler)
 		} // never retry after bytes escape
@@ -146,4 +204,10 @@ func (f *Fallback) ServeProject(w http.ResponseWriter, r *http.Request, p projec
 	} else {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
+}
+
+func validPeerResponse(res *http.Response, p project.Project, limit int64) bool {
+	return res.StatusCode == http.StatusOK && res.ContentLength >= 0 && res.ContentLength <= limit && res.Header.Get("Content-Encoding") == "" &&
+		len(res.Header.Values("X-Drop-Content-Digest")) == 1 && res.Header.Get("X-Drop-Content-Digest") == p.ActiveDigest &&
+		len(res.Header.Values("X-Drop-Policy-Revision")) == 1 && res.Header.Get("X-Drop-Policy-Revision") == strconv.FormatInt(p.PolicyRevision, 10)
 }

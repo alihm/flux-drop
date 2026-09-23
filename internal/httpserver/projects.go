@@ -24,6 +24,11 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 	// Firestore. Ingress bandwidth/IP rate limits remain a deployment requirement.
 	slots := make(chan struct{}, 4)
 	disk := newDiskAdmission(deps.Projects.DataRoot)
+	stagingRoot := deps.StagingRoot
+	if stagingRoot == "" {
+		stagingRoot = filepath.Join(deps.Projects.DataRoot, "staging")
+	}
+	stagingDisk := newDiskAdmission(stagingRoot)
 	mutate := func(handler http.HandlerFunc) http.Handler {
 		return RequireBrowserMutation(config.PublicOrigin, handler)
 	}
@@ -48,7 +53,7 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 		return project.ActorFrom(token, view)
 	}
 	bounded := func(r *http.Request) (*http.Request, context.CancelFunc) {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 		return r.WithContext(ctx), cancel
 	}
 	upload := func(update bool) http.HandlerFunc {
@@ -70,7 +75,7 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 				request.ProjectID = r.PathValue("id")
 				request.ExpectedRevision, err = expectedRevision(r)
 				if err != nil {
-					respond(w, 428, map[string]string{"error": "revision_required"})
+					revisionError(w, err)
 					return
 				}
 			}
@@ -99,7 +104,18 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 				return
 			}
 			defer release()
-			staged, err := stageRequest(w, r, filepath.Join(deps.Projects.DataRoot, "staging"), config.Limits)
+			if err := os.MkdirAll(stagingRoot, 0700); err != nil {
+				projectError(w, errors.Join(project.ErrStorage, err))
+				return
+			}
+			releaseStaging, err := stagingDisk.acquire(config.Limits)
+			if err != nil {
+				w.Header().Set("Retry-After", "30")
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "storage_unavailable"})
+				return
+			}
+			defer releaseStaging()
+			staged, err := stageRequest(w, r, stagingRoot, config.Limits)
 			if err != nil {
 				projectError(w, err)
 				return
@@ -125,7 +141,7 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 		}
 		revision, err := expectedRevision(r)
 		if err != nil {
-			respond(w, 428, map[string]string{"error": "revision_required"})
+			revisionError(w, err)
 			return
 		}
 		kind, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -165,7 +181,7 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 		}
 		revision, err := expectedRevision(r)
 		if err != nil {
-			respond(w, 428, map[string]string{"error": "revision_required"})
+			revisionError(w, err)
 			return
 		}
 		kind, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -234,7 +250,7 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 		}
 		revision, err := expectedRevision(r)
 		if err != nil {
-			respond(w, 428, map[string]string{"error": "revision_required"})
+			revisionError(w, err)
 			return
 		}
 		p, err := deps.Projects.Repository.Claim(r.Context(), a, r.PathValue("id"), revision)
@@ -254,7 +270,7 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 		}
 		revision, err := expectedRevision(r)
 		if err != nil {
-			respond(w, 428, map[string]string{"error": "revision_required"})
+			revisionError(w, err)
 			return
 		}
 		if err := deps.Projects.Repository.Tombstone(r.Context(), a, r.PathValue("id"), revision); err != nil {
@@ -265,8 +281,21 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 	}))
 }
 
+var errRevisionRequired = errors.New("revision required")
+
+func revisionError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errRevisionRequired) {
+		respond(w, http.StatusPreconditionRequired, map[string]string{"error": "revision_required"})
+		return
+	}
+	respond(w, http.StatusBadRequest, map[string]string{"error": "invalid_if_match"})
+}
+
 func expectedRevision(r *http.Request) (int64, error) {
 	values := r.Header.Values("If-Match")
+	if len(values) == 0 {
+		return 0, errRevisionRequired
+	}
 	if len(values) != 1 {
 		return 0, project.ErrInvalid
 	}

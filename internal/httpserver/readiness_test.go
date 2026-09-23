@@ -34,12 +34,16 @@ func TestCachedReadiness(t *testing.T) {
 }
 func TestReadinessProbeDoesNotLeaveFiles(t *testing.T) {
 	root := t.TempDir()
-	if err := StorageReady(root, content.DefaultLimits()); err != nil {
+	stagingRoot := filepath.Join(t.TempDir(), "staging")
+	if err := StorageReady(root, stagingRoot, content.DefaultLimits()); err != nil {
 		t.Fatal(err)
 	}
-	entries, err := os.ReadDir(filepath.Join(root, "staging"))
+	entries, err := os.ReadDir(stagingRoot)
 	if err != nil || len(entries) != 0 {
 		t.Fatal(entries, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "staging")); !os.IsNotExist(err) {
+		t.Fatal("readiness created staging in replicated data root")
 	}
 }
 func TestStagingGate(t *testing.T) {

@@ -3,7 +3,6 @@ package httpserver
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -12,16 +11,21 @@ import (
 
 // StorageReady verifies writable durable staging and upload admission headroom.
 // It creates and removes only its own temporary probe, never project content.
-func StorageReady(root string, limits content.Limits) error {
+func StorageReady(root, stagingRoot string, limits content.Limits) error {
 	release, err := newDiskAdmission(root).acquire(limits)
 	if err != nil {
 		return err
 	}
 	defer release()
-	dir := filepath.Join(root, "staging")
+	dir := stagingRoot
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
+	releaseStaging, err := newDiskAdmission(dir).acquire(limits)
+	if err != nil {
+		return err
+	}
+	defer releaseStaging()
 	info, err := os.Lstat(dir)
 	if err != nil {
 		return err

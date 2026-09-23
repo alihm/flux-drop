@@ -31,8 +31,8 @@ Nginx. Self IPs come from explicit configuration or `FLUX_NODE_HOST_IP` when
 available. See PEER_SETUP.md for identity issuance and per-node provisioning.
 
 Startup launches discovery and local-only mTLS delivery and injects the fallback
-dependency. Publishing requires separate explicit staging configuration as
-documented in STAGING.md. Listener failures terminate the process. Shutdown cancels discovery
+dependency. Passphrase-provisioned Flux publishing is enabled by default;
+STAGING.md describes the optional restricted test mode. Listener failures terminate the process. Shutdown cancels discovery
 and drains/closes the listener before Firestore closes. HTTP deadlines and header
 bounds are set. Certificates load at startup; rotation requires a restart.
 
@@ -139,24 +139,25 @@ outstanding; no public request is proxied to a replica yet.
 ## Discovery-selected fallback
 
 `NewFallback` creates a verified peer client and limits concurrent fallback
-requests to eight. `ProjectDeliveryWithFallback` calls it only after public/live
-metadata authorization, when local version verification fails. The product
-entrypoint does not inject it yet: runtime certificate/discovery/listener wiring
-is still outstanding.
+requests to eight. The product entrypoint injects it after peer runtime startup.
+Public delivery invokes it only after public/live metadata authorization when
+local version verification fails.
 
 Each fallback request rotates its starting peer, attempts at most three fresh
-discovery destinations, revalidates public IP/port, and has a 30-second total
+discovery destinations, revalidates public IP/port, and has a five-minute total
 deadline. It sends only the one-hop marker, active digest and policy revision.
 Cookies, authorization, query strings, ranges and browser validators are not
 forwarded. Private projects are never eligible.
 
-Only a 200 response bound to the expected digest/policy, without content encoding
-and with a known length no greater than 200 MiB, can be streamed. Public security
-headers and content type are generated locally; peer cookies, internal redirects
-and arbitrary headers are never copied. The receiver trusts the authenticated
-peer's file verification; it does not buffer an entire file to rehash it before
-delivery. Content is streamed without a disk cache. Mid-stream failures abort the
-response instead of retrying after bytes have been sent.
+The receiver first fetches the peer manifest, verifies its canonical hash against
+the digest from authoritative metadata, and locates the requested file hash. It
+then accepts only a 200 response bound to the expected digest/policy, without
+content encoding and with the manifest's exact content length. GET bytes are
+spooled temporarily and hashed before any response bytes escape. The spool is
+deleted after delivery; it is not a cache. Public security headers and content
+type are generated locally; peer cookies, internal redirects and arbitrary
+headers are never copied. HEAD checks the authenticated manifest and length but
+does not transfer file bytes.
 
 Fallback currently returns full 200 responses (or HEAD), ignoring optional ranges
 and cache validators. If-Match/If-Unmodified-Since fail conservatively with 412;
