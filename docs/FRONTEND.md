@@ -1,5 +1,12 @@
 # Public interface
 
+For fast local UI iteration, run `node ui-dev.mjs` at the repository root and
+open <http://127.0.0.1:5173/>. This localhost-only workbench reads the actual
+embedded home assets on every request, reloads the browser after edits, and uses
+an in-memory mock of the project API and Google sign-in. No Docker, Nginx, npm,
+or real credentials are required. The mock is intentionally separate from the
+production binary and does not validate real authorization or ZIP extraction.
+
 The Go binary embeds the landing page, project dashboard, management dialog, and
 private-project unlock page. CSS and JavaScript are local assets embedded into the
 HTML under exact-hash Content Security Policy rules. No third-party fonts,

@@ -3,6 +3,20 @@
 Static publishing on Flux with anonymous ownership, Google claiming, and
 replicated content. Live Flux and Google sign-in acceptance is still required.
 
+## UI development without Docker
+
+Run `node ui-dev.mjs` (Node 20+) and open
+<http://127.0.0.1:5173/>. The browser reloads when
+`internal/httpserver/ui/home.html`, `home.css`, or `home.js` changes. The server
+binds only to localhost and uses an in-memory project API and simulated Google
+sign-in, so you can publish a sample HTML file, inspect cards, claim it, and use
+the management dialog. Restart the process to clear demo projects. Pass a port as
+the first argument if 5173 is in use, for example `node ui-dev.mjs 5174`.
+
+This preview is for interface iteration. It does not run Flux, Nginx, real Google
+OAuth, the production database, or ZIP extraction. Use the Docker integration
+suites below when testing those components.
+
 ## Deploy for testing
 
 The image includes Go, Nginx, process supervision and health checks. Automatic
