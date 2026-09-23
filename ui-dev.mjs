@@ -267,4 +267,16 @@ const watcher = watch(ui, (_event, filename) => {
   }, 120);
 });
 server.listen(port, host, () => console.log(`Flux Drop UI preview: http://${host}:${port}\nEdit internal/httpserver/ui/{home.html,home.css,home.js} and the page reloads.`));
-process.on('SIGINT', () => { clearTimeout(reloadTimer); watcher.close(); server.close(); });
+let stopping = false;
+function stop() {
+  if (stopping) return;
+  stopping = true;
+  clearTimeout(reloadTimer);
+  watcher.close();
+  for (const client of listeners) client.end();
+  listeners.clear();
+  server.close();
+  server.closeAllConnections();
+}
+process.on('SIGINT', stop);
+process.on('SIGTERM', stop);
