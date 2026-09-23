@@ -1,0 +1,7 @@
+FROM golang:1.27.1-alpine AS build
+WORKDIR /src
+COPY tests/raft/fixtures/main.go ./main.go
+RUN CGO_ENABLED=0 go build -o /fixtures-init main.go
+FROM nginx:1.30.5-alpine
+COPY --from=build /fixtures-init /usr/local/bin/fixtures-init
+ENTRYPOINT ["/usr/local/bin/fixtures-init"]

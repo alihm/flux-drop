@@ -1,0 +1,16 @@
+{
+  "name": "flux-drop-browser-isolation",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "fixtures": "node build-fixtures.mjs",
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.2",
+    "esbuild": "0.25.12",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "vue": "3.5.25"
+  }
+}

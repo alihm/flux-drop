@@ -1,0 +1,20 @@
+name: flux-drop
+services:
+  drop:
+    build: .
+    image: flux-drop:staging
+    env_file: .env
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - drop-data:/data
+      - ./secrets:/run/secrets:ro
+    read_only: true
+    tmpfs:
+      - /tmp:uid=65534,gid=65534,mode=1777,size=536870912
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    stop_grace_period: 25s
+volumes:
+  drop-data:

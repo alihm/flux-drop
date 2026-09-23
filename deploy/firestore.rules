@@ -1,0 +1,20 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Go authenticates with IAM. Browser SDKs must never read/write these
+    // records directly. Deploy only to a dedicated Drop database/project or
+    // merge these scoped matches into existing rules; do not overwrite Orbit's
+    // rules with this file.
+    match /drop_sessions/{document=**} { allow read, write: if false; }
+    match /drop_session_budgets/{document=**} { allow read, write: if false; }
+    match /drop_projects/{document=**} { allow read, write: if false; }
+    match /drop_slugs/{document=**} { allow read, write: if false; }
+    match /drop_digests/{document=**} { allow read, write: if false; }
+    match /drop_operations/{document=**} { allow read, write: if false; }
+    match /drop_quotas/{document=**} { allow read, write: if false; }
+    match /drop_grants/{document=**} { allow read, write: if false; }
+    match /drop_unlock_budgets/{document=**} { allow read, write: if false; }
+    match /drop_gc_jobs/{document=**} { allow read, write: if false; }
+    match /drop_retirements/{document=**} { allow read, write: if false; }
+  }
+}

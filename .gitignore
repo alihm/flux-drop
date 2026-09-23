@@ -1,0 +1,15 @@
+/bin/
+/data/
+/secrets/
+*.key
+*service-account*.json
+/coverage.out
+/.env
+/web/node_modules/
+/web/dist/
+*.test
+/tests/browser/node_modules/
+/tests/browser/generated/
+/tests/browser/certs/
+/tests/browser/test-results/
+/tests/browser/playwright-report/

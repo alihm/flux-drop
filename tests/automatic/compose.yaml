@@ -1,0 +1,19 @@
+name: flux-drop-auto-tests
+services:
+  app:
+    image: flux-drop:raft-test
+    network_mode: none
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      FLUX_APP_NAME: drop
+      FLUX_NODE_HOST_IP: 192.0.2.10
+      DROP_CLUSTER_PASSPHRASE: disposable-automatic-startup-test-secret-only
+    volumes:
+      - data:/data
+      - state:/var/lib/drop-cluster
+volumes:
+  data:
+  state:

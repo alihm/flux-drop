@@ -1,0 +1,13 @@
+.git
+.agents
+.codex
+.env*
+bin
+data
+secrets
+**/*.key
+**/*service-account*.json
+**/node_modules
+tests/browser/certs
+tests/browser/test-results
+tests/browser/playwright-report

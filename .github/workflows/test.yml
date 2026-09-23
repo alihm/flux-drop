@@ -1,0 +1,145 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  raft-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: docker compose -f tests/raft/compose.yaml up --build -d
+      - run: node tests/raft/run.mjs
+      - run: docker compose -f tests/automatic/compose.yaml up -d
+      - run: node tests/automatic/run.mjs
+      - run: docker compose -f tests/raft/compose.yaml logs --tail=100
+        if: failure()
+      - run: docker compose -f tests/raft/compose.yaml down -v
+        if: always()
+      - run: docker compose -f tests/automatic/compose.yaml down -v
+        if: always()
+
+  staging-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: docker compose -f tests/staging/compose.yaml up --build -d
+      - run: node tests/staging/run.mjs
+      - run: docker compose -f tests/staging/compose.yaml logs --tail=100
+        if: failure()
+      - run: docker compose -f tests/staging/compose.yaml down -v
+        if: always()
+
+  auth-bundle:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --ignore-scripts
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - run: git diff --exit-code -- internal/httpserver/ui/auth.bundle.js
+
+  go:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - run: go test -race ./...
+      - run: go vet ./...
+      - run: go build -o bin/drop ./cmd/drop
+      - run: go build -o bin/drop-cluster ./cmd/drop-cluster
+      - run: go test -race ./internal/cluster -count=5
+
+  firestore-transactions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: true
+      - run: docker compose -f tests/firestore/compose.yaml up -d
+      - name: Wait for Firestore emulator
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --silent --fail http://127.0.0.1:18080/; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - run: go test -race -v ./internal/session ./internal/project ./internal/httpserver -run TestFirestore
+        env:
+          DROP_TEST_FIRESTORE: '1'
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:18080
+      - run: docker compose -f tests/firestore/compose.yaml down
+        if: always()
+
+  nginx-delivery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose -f tests/delivery/compose.yaml run --build --rm delivery
+      - run: docker compose -f tests/delivery/compose.yaml down
+        if: always()
+
+  browser-isolation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: tests/browser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: tests/browser/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm run fixtures
+      - run: npx playwright install --with-deps chromium firefox webkit
+      - name: Generate local test certificate
+        run: |
+          mkdir -p certs
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout certs/key.pem -out certs/cert.pem -days 2 -subj /CN=localhost -addext subjectAltName=DNS:localhost,IP:127.0.0.1
+      - run: docker compose up --build -d
+      - run: docker compose exec -T nginx nginx -t
+      - run: docker compose exec -T nginx nginx -t -c /etc/nginx/production-nginx.conf
+      - name: Wait for fixture
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --insecure https://localhost:18443/healthz; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - run: npm test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-isolation-traces
+          path: tests/browser/test-results/
+          retention-days: 7
+      - run: docker compose down
+        if: always()

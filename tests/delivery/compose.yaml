@@ -1,0 +1,14 @@
+name: flux-drop-delivery-tests
+services:
+  delivery:
+    build:
+      context: ../..
+      dockerfile: tests/delivery/Dockerfile
+    environment:
+      DROP_TEST_NGINX: '1'
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /data:uid=65534,gid=65534,mode=0700
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]

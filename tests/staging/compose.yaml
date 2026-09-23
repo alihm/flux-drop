@@ -1,0 +1,35 @@
+name: flux-drop-staging-tests
+services:
+  firestore:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:546.0.0-emulators
+    entrypoint: [gcloud, beta, emulators, firestore, start]
+    command: ["--host-port=0.0.0.0:8080", "--project=demo-drop-staging", "--quiet"]
+  auth:
+    build:
+      context: ../..
+      dockerfile: tests/staging/Dockerfile.auth
+    ports: ["127.0.0.1:19099:9099"]
+  drop:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: flux-drop:staging-test
+    depends_on: [firestore, auth]
+    environment:
+      DROP_ENV: development
+      DROP_METADATA_BACKEND: firestore-emulator
+      FLUX_APP_NAME: drop
+      DROP_MAINTENANCE_ENABLED: 'true'
+      DROP_STAGING_PASSWORD: isolated-test-password-not-for-deployment
+      FIREBASE_PROJECT_ID: demo-drop-staging
+      FIRESTORE_EMULATOR_HOST: firestore:8080
+      FIREBASE_AUTH_EMULATOR_HOST: auth:9099
+    ports: ["127.0.0.1:18088:8080"]
+    read_only: true
+    tmpfs: [/tmp]
+    volumes: [staging-data:/data]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 25s
+volumes:
+  staging-data:

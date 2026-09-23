@@ -1,0 +1,7 @@
+name: flux-drop-firestore-tests
+services:
+  firestore:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:546.0.0-emulators
+    entrypoint: [gcloud, beta, emulators, firestore, start]
+    command: ["--host-port=0.0.0.0:8080", "--project=demo-flux-drop", "--quiet"]
+    ports: ["127.0.0.1:18080:8080"]

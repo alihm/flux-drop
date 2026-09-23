@@ -1,0 +1,1 @@
+{"name":"flux-drop-auth-client","private":true,"type":"module","scripts":{"build":"esbuild auth.js --bundle --minify --format=iife --platform=browser --target=es2022 --outfile=../internal/httpserver/ui/auth.bundle.js"},"dependencies":{"firebase":"12.19.0"},"devDependencies":{"esbuild":"0.25.12"}}

@@ -1,0 +1,5 @@
+FROM node:22-alpine
+RUN npm install --global firebase-tools@14.22.0
+WORKDIR /emulator
+COPY tests/staging/firebase.json ./firebase.json
+ENTRYPOINT ["firebase", "emulators:start", "--only", "auth", "--project", "demo-drop-staging", "--config", "/emulator/firebase.json"]

@@ -1,0 +1,23 @@
+name: flux-drop-isolation
+services:
+  fixture:
+    build:
+      context: ../..
+      dockerfile: tests/browser/Dockerfile.fixture
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  nginx:
+    image: nginx:1.30.5-alpine
+    entrypoint: [nginx, -g, "daemon off;"]
+    depends_on: [fixture]
+    ports: ["127.0.0.1:18443:8443"]
+    read_only: true
+    tmpfs: [/tmp, /var/cache/nginx, /var/run]
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../../deploy/snippets:/etc/nginx/drop:ro
+      - ../../deploy/nginx.conf:/etc/nginx/production-nginx.conf:ro
+      - ./fixtures:/fixtures:ro
+      - ./generated:/generated:ro
+      - ./certs:/certs:ro

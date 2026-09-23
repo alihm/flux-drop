@@ -1,0 +1,63 @@
+name: flux-drop-raft-tests
+x-app: &app
+  image: flux-drop:raft-test
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+  depends_on:
+    fixtures:
+      condition: service_completed_successfully
+  environment:
+    FLUX_APP_NAME: drop
+    DROP_STAGING_PASSWORD: isolated-raft-test-password-not-for-deployment
+    DROP_MAINTENANCE_ENABLED: 'true'
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  stop_grace_period: 25s
+services:
+  fixtures:
+    build:
+      context: ../..
+      dockerfile: tests/raft/Dockerfile.fixtures
+    network_mode: none
+    volumes:
+      - state-one:/state-one
+      - state-two:/state-two
+      - state-three:/state-three
+  one:
+    <<: *app
+    networks:
+      cluster:
+        ipv4_address: 172.29.188.11
+    volumes:
+      - content:/data
+      - state-one:/var/lib/drop-cluster
+  two:
+    <<: *app
+    networks:
+      cluster:
+        ipv4_address: 172.29.188.12
+    volumes:
+      - content:/data
+      - state-two:/var/lib/drop-cluster
+  three:
+    <<: *app
+    networks:
+      cluster:
+        ipv4_address: 172.29.188.13
+    volumes:
+      - content:/data
+      - state-three:/var/lib/drop-cluster
+networks:
+  cluster:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.29.188.0/24
+volumes:
+  content:
+  state-one:
+  state-two:
+  state-three:
