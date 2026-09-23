@@ -202,6 +202,11 @@
 
   const dialog = $('manage-dialog');
   let config, session, files = [], selectionError = '', key = '', cursor = '';
+  let transferToken = new URLSearchParams(window.location.hash.slice(1)).get('claim-token');
+  if (transferToken !== null) {
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+    if (!/^[a-f0-9]{32}\.[A-Za-z0-9_-]{43}$/.test(transferToken)) transferToken = null;
+  }
   let uploading = false, authenticating = false, managing = false, published = false, selecting = false, nameEdited = false;
   let currentUpload, lastPublishedProject, modalTrigger, toastTimer;
 
@@ -254,7 +259,57 @@
     $('sign-out').hidden = !session?.authenticated && !session?.reauthenticationRequired;
     $('sign-in').disabled = authenticating || !session;
     $('sign-out').disabled = authenticating || !session;
+    if (!session?.authenticated) { $('agent-keys').hidden = true; $('agent-key-secret').hidden = true; $('agent-key-value').value = ''; }
   }
+
+  async function loadAgentKeys() {
+    if (!session?.authenticated) return;
+    try {
+      const response = await fetch('/api/agent-keys', {cache: 'no-store'});
+      if (!response.ok) return;
+      const data = await response.json();
+      const list = $('agent-key-list'); list.replaceChildren();
+      for (const key of data.keys || []) {
+        const row = document.createElement('div'); row.className = 'agent-key-row';
+        const details = document.createElement('div');
+        const label = document.createElement('strong'); label.textContent = key.label;
+        const expiry = document.createElement('span'); expiry.textContent = 'Expires ' + dateLabel(key.expiresAt);
+        details.append(label, expiry); row.append(details);
+        addButton(row, 'Revoke', 'secondary', async () => {
+          if (!window.confirm('Revoke this API key? Agents using it will immediately lose access.')) return;
+          const result = await fetch('/api/agent-keys/' + encodeURIComponent(key.id), {method: 'DELETE', headers: {'X-CSRF-Token': session.csrfToken}});
+          if (!result.ok) { $('agent-key-status').textContent = 'Could not revoke the key. Try again.'; return; }
+          $('agent-key-status').textContent = 'Key revoked.';
+          await loadAgentKeys();
+        });
+        list.append(row);
+      }
+      if (!data.keys?.length) note(list, 'No active API keys. Create one to publish from an agent.');
+      $('agent-keys').hidden = false;
+    } catch { $('agent-key-status').textContent = 'Could not load API keys. Refresh to retry.'; }
+  }
+
+  $('create-agent-key').onclick = async () => {
+    const label = $('agent-key-label').value.trim();
+    if (!session?.authenticated || !label) { $('agent-key-status').textContent = 'Enter a label for this key.'; return; }
+    $('create-agent-key').disabled = true;
+    $('agent-key-status').textContent = 'Creating key…';
+    try {
+      const response = await fetch('/api/agent-keys', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken}, body: JSON.stringify({label})});
+      if (!response.ok) throw new Error(response.status === 409 ? 'You already have five active keys. Revoke one first.' : 'Could not create a key. Try again.');
+      const data = await response.json();
+      $('agent-key-value').value = data.key;
+      $('agent-key-secret').hidden = false;
+      $('agent-key-status').textContent = 'Key created. Copy it now; it will not be shown again.';
+      $('agent-key-label').value = '';
+      await loadAgentKeys();
+    } catch (error) { $('agent-key-status').textContent = error.message; }
+    finally { $('create-agent-key').disabled = false; }
+  };
+  $('copy-agent-key').onclick = async () => {
+    try { await navigator.clipboard.writeText($('agent-key-value').value); toast('API key copied'); }
+    catch { $('agent-key-status').textContent = 'Copy was blocked. Select the key above and copy it manually.'; }
+  };
 
   function state() {
     const nameValid = namePattern.test($('name').value);
@@ -678,6 +733,7 @@
       await exchange('/api/auth/google', {idToken});
       $('auth-status').textContent = 'Signed in. Claimed sites stay available across devices.';
       if (refresh) await listProjects();
+      await loadAgentKeys();
       return true;
     } catch (error) {
       $('auth-status').textContent = error.code === 'auth/popup-closed-by-user' ? 'Sign-in cancelled.'
@@ -744,6 +800,26 @@
   }
   $('claim-result').onclick = () => {
     if (lastPublishedProject) claimProject(lastPublishedProject, $('expiry'));
+  };
+
+  $('redeem-transfer').onclick = async () => {
+    if (!transferToken || !session || managing || authenticating) return;
+    if (!session.authenticated && !await signIn(false)) {
+      $('transfer-status').textContent = 'Sign in to finish claiming this site.';
+      return;
+    }
+    managing = true;
+    $('redeem-transfer').disabled = true;
+    $('transfer-status').textContent = 'Claiming site…';
+    try {
+      const response = await fetch('/api/transfers/redeem', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken}, body: JSON.stringify({token: transferToken})});
+      if (!response.ok) throw new Error(response.status === 404 ? 'This claim link is invalid, expired, or already used.' : 'Could not confirm the claim. Please try again.');
+      transferToken = null;
+      $('transfer-claim').hidden = true;
+      status('Site claimed. It is now in your workspace.');
+      await listProjects();
+    } catch (error) { $('transfer-status').textContent = error.message; }
+    finally { managing = false; $('redeem-transfer').disabled = false; }
   };
 
   function dateLabel(value) {
@@ -945,6 +1021,33 @@
     share.append(code, shareText);
     sharePanel.append(share);
     if (!renderQR(code, siteURL)) code.hidden = true;
+    if (project.expiresAt) {
+      const transferBox = document.createElement('div'); transferBox.className = 'danger-zone'; sharePanel.append(transferBox);
+      const transferTitle = document.createElement('h3'); transferTitle.textContent = 'Give this site to someone'; transferBox.append(transferTitle);
+      note(transferBox, 'Create a one-use claim link for another person. They must sign in with Google within 24 hours. Creating a new link invalidates the old one.');
+      const transferOutput = field(transferBox, 'One-use claim link', 'text'); transferOutput.readOnly = true; transferOutput.hidden = true;
+      const makeTransfer = addButton(transferBox, 'Create claim link', 'secondary', async () => {
+        makeTransfer.disabled = true;
+        setMessage('Creating a one-use claim link…');
+        try {
+          const response = await fetch('/api/projects/' + project.id + '/transfer', {method: 'POST', headers: {'X-CSRF-Token': session.csrfToken, 'If-Match': `"${project.revision}"`}});
+          if (!response.ok) throw new Error('Could not create a link. Refresh your sites and try again.');
+          const result = await response.json();
+          transferOutput.value = result.claimURL; transferOutput.hidden = false;
+          setMessage('Link ready. Share it privately. It expires after 24 hours.');
+        } catch (error) { setMessage(error.message, true); }
+        finally { makeTransfer.disabled = false; }
+      });
+      const copyTransfer = addButton(transferBox, 'Copy claim link', 'secondary', () => {
+        if (transferOutput.value) copyLink(transferOutput.value, copyTransfer, message);
+        else setMessage('Create a claim link first.', true);
+      });
+      addButton(transferBox, 'Revoke claim link', 'secondary', async () => {
+        const response = await fetch('/api/projects/' + project.id + '/transfer', {method: 'DELETE', headers: {'X-CSRF-Token': session.csrfToken, 'If-Match': `"${project.revision}"`}});
+        if (response.ok) { transferOutput.value = ''; transferOutput.hidden = true; setMessage('Claim link revoked.'); }
+        else setMessage('Could not revoke the link. Refresh your sites and try again.', true);
+      });
+    }
 
     const settingsTitle = document.createElement('h3'); settingsTitle.textContent = 'Site name'; settingsPanel.append(settingsTitle);
     note(settingsPanel, 'Renaming keeps the six-character suffix. Existing links may continue to redirect.');
@@ -993,7 +1096,9 @@
           : session.reauthenticationRequired ? 'Sign in again to restore account access.'
             : window.DropAuth?.preview ? 'UI preview · Google sign-in is simulated.' : '';
         state();
+        if (transferToken) $('transfer-claim').hidden = false;
         if (config.publishingEnabled) await listProjects();
+        if (session.authenticated) await loadAgentKeys();
       }
       status(config.publishingEnabled ? 'Choose a site to get started.' : 'Publishing is unavailable right now.', !config.publishingEnabled);
     } catch (error) { status(error.message, true); state(); }

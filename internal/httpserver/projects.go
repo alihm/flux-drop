@@ -58,11 +58,11 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 		return r.WithContext(ctx), cancel
 	}
-	upload := func(update bool) http.HandlerFunc {
+	upload := func(update bool, resolve func(*http.Request, bool) (project.Actor, error)) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			r, cancel := bounded(r)
 			defer cancel()
-			a, err := actor(r, true)
+			a, err := resolve(r, true)
 			if err != nil {
 				projectError(w, err)
 				return
@@ -142,8 +142,74 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 			projectResponse(w, result)
 		}
 	}
-	mux.Handle("POST /api/projects", mutate(upload(false)))
-	mux.Handle("POST /api/projects/{id}/versions", mutate(upload(true)))
+	mux.Handle("POST /api/projects", mutate(upload(false, actor)))
+	mux.Handle("POST /api/projects/{id}/versions", mutate(upload(true, actor)))
+	if keys, ok := deps.Projects.Repository.(interface {
+		IssueAgentKey(context.Context, project.Actor, string) (string, project.AgentKey, error)
+		ListAgentKeys(context.Context, project.Actor) ([]project.AgentKey, error)
+		RevokeAgentKey(context.Context, project.Actor, string) error
+		AuthenticateAgentKey(context.Context, string) (project.Actor, error)
+	}); ok {
+		agentActor := func(r *http.Request, _ bool) (project.Actor, error) {
+			if r.Header.Get("Origin") != "" || len(r.Header.Values("Authorization")) != 1 {
+				return project.Actor{}, session.ErrUnauthorized
+			}
+			secret, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if !found {
+				return project.Actor{}, session.ErrUnauthorized
+			}
+			return keys.AuthenticateAgentKey(r.Context(), secret)
+		}
+		mux.HandleFunc("POST /api/agent/projects", upload(false, agentActor))
+		mux.HandleFunc("GET /api/agent-keys", func(w http.ResponseWriter, r *http.Request) {
+			a, err := actor(r, false)
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			list, err := keys.ListAgentKeys(r.Context(), a)
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			respond(w, 200, map[string]any{"keys": list})
+		})
+		mux.Handle("POST /api/agent-keys", mutate(func(w http.ResponseWriter, r *http.Request) {
+			a, err := actor(r, true)
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, 4096)
+			var input struct {
+				Label string `json:"label"`
+			}
+			decoder := json.NewDecoder(r.Body)
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&input); err != nil || decoder.Decode(new(any)) != io.EOF {
+				projectError(w, project.ErrInvalid)
+				return
+			}
+			secret, key, err := keys.IssueAgentKey(r.Context(), a, input.Label)
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			respond(w, 201, map[string]any{"key": secret, "metadata": key})
+		}))
+		mux.Handle("DELETE /api/agent-keys/{id}", mutate(func(w http.ResponseWriter, r *http.Request) {
+			a, err := actor(r, true)
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			if err := keys.RevokeAgentKey(r.Context(), a, r.PathValue("id")); err != nil {
+				projectError(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}))
+	}
 	privacy := &project.PrivacyService{Repository: deps.Projects.Repository, DataRoot: deps.Projects.DataRoot, Hasher: hasher}
 	mux.Handle("PUT /api/projects/{id}/privacy", mutate(func(w http.ResponseWriter, r *http.Request) {
 		r, cancel := bounded(r)
@@ -274,6 +340,70 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 		}
 		projectResponse(w, p)
 	}))
+	if transfers, ok := deps.Projects.Repository.(interface {
+		CreateTransfer(context.Context, project.Actor, string, int64) (string, time.Time, error)
+		RevokeTransfer(context.Context, project.Actor, string, int64) error
+		RedeemTransfer(context.Context, project.Actor, string) (project.Project, error)
+	}); ok {
+		mux.Handle("POST /api/projects/{id}/transfer", mutate(func(w http.ResponseWriter, r *http.Request) {
+			a, err := actor(r, true)
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			revision, err := expectedRevision(r)
+			if err != nil {
+				revisionError(w, err)
+				return
+			}
+			token, expires, err := transfers.CreateTransfer(r.Context(), a, r.PathValue("id"), revision)
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			respond(w, http.StatusOK, map[string]any{"claimURL": config.PublicOrigin + "/#claim-token=" + token, "expiresAt": expires})
+		}))
+		mux.Handle("DELETE /api/projects/{id}/transfer", mutate(func(w http.ResponseWriter, r *http.Request) {
+			a, err := actor(r, true)
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			revision, err := expectedRevision(r)
+			if err != nil {
+				revisionError(w, err)
+				return
+			}
+			if err := transfers.RevokeTransfer(r.Context(), a, r.PathValue("id"), revision); err != nil {
+				projectError(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		mux.Handle("POST /api/transfers/redeem", mutate(func(w http.ResponseWriter, r *http.Request) {
+			a, err := actor(r, true)
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, 4096)
+			var input struct {
+				Token string `json:"token"`
+			}
+			decoder := json.NewDecoder(r.Body)
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&input); err != nil || decoder.Decode(new(any)) != io.EOF {
+				projectError(w, project.ErrInvalid)
+				return
+			}
+			claimed, err := transfers.RedeemTransfer(r.Context(), a, input.Token)
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			projectResponse(w, claimed)
+		}))
+	}
 	mux.Handle("DELETE /api/projects/{id}", mutate(func(w http.ResponseWriter, r *http.Request) {
 		r, cancel := bounded(r)
 		defer cancel()

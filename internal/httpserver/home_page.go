@@ -8,8 +8,26 @@ import (
 	"net/http"
 )
 
-//go:embed ui/home.html ui/home.css ui/home.js ui/auth.bundle.js
+//go:embed ui/home.html ui/home.css ui/home.js ui/auth.bundle.js ui/agents.html
 var homeUI embed.FS
+
+func AgentGuide() http.Handler {
+	html, _ := homeUI.ReadFile("ui/agents.html")
+	css, _ := homeUI.ReadFile("ui/home.css")
+	page := template.Must(template.New("agents").Parse(string(html)))
+	sum := sha256.Sum256(css)
+	csp := "default-src 'none'; style-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Security-Policy", csp)
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if r.Method != "HEAD" {
+			_ = page.Execute(w, struct{ CSS template.CSS }{template.CSS(css)})
+		}
+	})
+}
 
 func HomePage() http.Handler {
 	return HomePageWithAuth(nil)

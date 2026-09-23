@@ -28,6 +28,7 @@
         <a class="nav-link" href="#how-it-works">How it works</a>
         <a class="nav-link" href="#features">Features</a>
         <a class="nav-link" href="#faq">FAQ</a>
+        <a class="nav-link" href="/agents">For agents</a>
         <a id="projects-nav" class="nav-link" href="#projects" aria-label="Your sites" hidden><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="3" width="7" height="6" rx="1.5"/><rect x="11" y="3" width="7" height="6" rx="1.5"/><rect x="2" y="11" width="7" height="6" rx="1.5"/><rect x="11" y="11" width="7" height="6" rx="1.5"/></svg><span class="projects-nav-label">Sites</span> <span id="project-count"></span></a>
         <button id="theme-toggle" class="icon-button ghost" type="button" aria-label="Switch color theme"><svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></svg></button>
         <button id="sign-in" class="auth-button" type="button" aria-label="Sign in with Google" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M22.6 12.3c0-.8-.1-1.5-.2-2.3H12v4.3h5.9a5 5 0 0 1-2.2 3.3v2.8h3.6c2.1-1.9 3.3-4.8 3.3-8.1Z"/><path fill="#34A853" d="M12 23c3 0 5.5-1 7.3-2.7l-3.6-2.8c-1 .7-2.2 1.1-3.7 1.1-2.9 0-5.3-1.9-6.2-4.5H2.1v2.9A11 11 0 0 0 12 23Z"/><path fill="#FBBC05" d="M5.8 14.1a6.6 6.6 0 0 1 0-4.2V7H2.1a11 11 0 0 0 0 10l3.7-2.9Z"/><path fill="#EA4335" d="M12 5.4c1.6 0 3.1.6 4.2 1.7l3.2-3.2A11 11 0 0 0 2.1 7l3.7 2.9C6.7 7.3 9.1 5.4 12 5.4Z"/></svg><span id="sign-in-label">Sign in</span></button>
@@ -43,6 +44,10 @@
         <p class="lede">Publish HTML, CSS, JavaScript, and assets to a live link in seconds. No account. No build step.</p>
         <p id="auth-status" class="auth-status" role="status" aria-live="polite"></p>
       </div>
+      <section id="transfer-claim" class="transfer-claim" aria-labelledby="transfer-title" hidden>
+        <div><p class="kicker">A site was shared with you</p><h2 id="transfer-title">Claim this site</h2><p>Sign in with Google to add it to your workspace. This link expires after 24 hours and can be used once.</p><p id="transfer-status" role="status" aria-live="polite"></p></div>
+        <button id="redeem-transfer" type="button" class="primary-action">Claim with Google</button>
+      </section>
 
       <section id="publish-panel" class="publish" aria-labelledby="publish-heading">
         <h2 id="publish-heading" class="visually-hidden">Publish a static site</h2>
@@ -90,6 +95,14 @@
         <p id="projects-status" role="status" aria-live="polite"></p>
         <div id="project-list" class="project-grid"></div>
         <button id="more-projects" type="button" class="secondary" hidden>Load more</button>
+      </section>
+
+      <section id="agent-keys" class="projects" aria-labelledby="agent-keys-heading" hidden>
+        <div class="section-heading"><div><p class="kicker">Automate publishing</p><h2 id="agent-keys-heading">API keys</h2></div><a class="button-link secondary" href="/agents">Agent guide <span aria-hidden="true">↗</span></a></div>
+        <p class="field-hint">Publish-only keys create sites in your account. They cannot edit or remove existing sites. Each key expires after 90 days.</p>
+        <div class="agent-key-create"><label for="agent-key-label">Key label</label><input id="agent-key-label" type="text" maxlength="64" placeholder="e.g. My coding agent" autocomplete="off"><button id="create-agent-key" type="button">Create key</button></div>
+        <div id="agent-key-secret" class="agent-key-secret" hidden><p>Copy this key now. It will not be shown again.</p><input id="agent-key-value" type="text" readonly aria-label="New API key"><button id="copy-agent-key" type="button" class="secondary">Copy key</button></div>
+        <p id="agent-key-status" role="status" aria-live="polite"></p><div id="agent-key-list" class="agent-key-list"></div>
       </section>
 
       <section id="how-it-works" class="band" aria-labelledby="how-heading">
@@ -145,7 +158,7 @@
             <a href="https://github.com/runonflux" target="_blank" rel="noopener noreferrer" aria-label="Flux on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.4-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.4 1.1 2.9.8.1-.6.4-1.1.6-1.3-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.8 1a9.6 9.6 0 0 1 5 0c1.9-1.3 2.8-1 2.8-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.4 4.7-4.6 5 .4.3.7.9.7 1.9V21c0 .3.2.6.7.5A10 10 0 0 0 12 2Z"/></svg></a>
           </div>
         </div>
-        <nav aria-labelledby="footer-product"><h2 id="footer-product">Flux Drop</h2><ul><li><a href="#publish-panel">Publish a site</a></li><li><a href="#how-it-works">How it works</a></li><li><a href="#features">Features</a></li><li><a href="#faq">FAQ</a></li></ul></nav>
+        <nav aria-labelledby="footer-product"><h2 id="footer-product">Flux Drop</h2><ul><li><a href="#publish-panel">Publish a site</a></li><li><a href="#how-it-works">How it works</a></li><li><a href="#features">Features</a></li><li><a href="/agents">For agents</a></li><li><a href="#faq">FAQ</a></li></ul></nav>
         <nav aria-labelledby="footer-flux"><h2 id="footer-flux">Flux products</h2><ul><li><a href="https://orbit.runonflux.com" target="_blank" rel="noopener noreferrer">Orbit</a></li><li><a href="https://cloud.runonflux.com/" target="_blank" rel="noopener noreferrer">FluxCloud</a></li><li><a href="https://ai.runonflux.com/" target="_blank" rel="noopener noreferrer">FluxAI</a></li><li><a href="https://console.fluxedge.ai/" target="_blank" rel="noopener noreferrer">FluxEdge</a></li><li><a href="https://cloud.runonflux.com/marketplace/" target="_blank" rel="noopener noreferrer">Marketplace</a></li></ul></nav>
         <nav aria-labelledby="footer-resources"><h2 id="footer-resources">Resources</h2><ul><li><a href="https://runonflux.com" target="_blank" rel="noopener noreferrer">runonflux.com</a></li><li><a href="https://docs.runonflux.com/" target="_blank" rel="noopener noreferrer">Documentation</a></li><li><a href="https://support.runonflux.io/support/home" target="_blank" rel="noopener noreferrer">Support</a></li><li><a href="https://github.com/runonflux" target="_blank" rel="noopener noreferrer">GitHub</a></li></ul></nav>
         <nav aria-labelledby="footer-legal"><h2 id="footer-legal">Legal</h2><ul><li><a href="https://runonflux.com/terms-of-service/" target="_blank" rel="noopener noreferrer">Terms of Service</a></li><li><a href="https://runonflux.com/privacy-policy/" target="_blank" rel="noopener noreferrer">Privacy Policy</a></li><li><a href="https://support.runonflux.io/support/home" target="_blank" rel="noopener noreferrer">Report abuse</a></li><li><a href="https://runonflux.com/bug-bounty/" target="_blank" rel="noopener noreferrer">Bug bounty</a></li></ul></nav>

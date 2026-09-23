@@ -29,6 +29,9 @@ func (s *RaftRepository) limit(o Owner) int64 {
 }
 
 func (s *RaftRepository) authorize(tx *raftTx, a Actor) error {
+	if a.AgentKeyDigest != "" {
+		return session.ErrUnauthorized
+	}
 	if !digestRE.MatchString(a.SessionDigest) || a.AnonymousID == "" {
 		return session.ErrUnauthorized
 	}
@@ -48,14 +51,37 @@ func (s *RaftRepository) authorize(tx *raftTx, a Actor) error {
 	return nil
 }
 
+func (s *RaftRepository) authorizePublish(tx *raftTx, a Actor) error {
+	if a.AgentKeyDigest == "" {
+		return s.authorize(tx, a)
+	}
+	if !digestRE.MatchString(a.AgentKeyDigest) || a.UID == "" || a.AnonymousID != "" || a.SessionDigest != "" {
+		return session.ErrUnauthorized
+	}
+	key, err := raftRead[AgentKey](tx, s.raftRef("agent_keys", a.AgentKeyDigest))
+	if raftMissing(err) {
+		return session.ErrUnauthorized
+	}
+	if err != nil {
+		return err
+	}
+	if key.UID != a.UID || !s.now().Before(key.ExpiresAt) {
+		return session.ErrUnauthorized
+	}
+	return nil
+}
+
 func (s *RaftRepository) Reserve(ctx context.Context, a Actor, r Reservation) (Prepared, error) {
 	if err := validateReservation(r); err != nil {
 		return Prepared{}, err
 	}
+	if a.AgentKeyDigest != "" && r.ProjectID != "" {
+		return Prepared{}, ErrForbidden
+	}
 	opID := operationID(a, r.Key)
 	var result Prepared
 	err := s.runContent(ctx, func(ctx context.Context, tx *raftTx) error {
-		if err := s.authorize(tx, a); err != nil {
+		if err := s.authorizePublish(tx, a); err != nil {
 			return err
 		}
 		op, err := raftRead[Operation](tx, s.raftRef("operations", opID))
@@ -211,7 +237,7 @@ func (s *RaftRepository) activate(ctx context.Context, a Actor, opID, passwordDi
 	}
 	var result Project
 	err := s.runContent(ctx, func(ctx context.Context, tx *raftTx) error {
-		if err := s.authorize(tx, a); err != nil {
+		if err := s.authorizePublish(tx, a); err != nil {
 			return err
 		}
 		op, err := raftRead[Operation](tx, s.raftRef("operations", opID))
@@ -309,7 +335,7 @@ func (s *RaftRepository) abort(ctx context.Context, a *Actor, opID string, expir
 			if a == nil {
 				return ErrForbidden
 			}
-			if err := s.authorize(tx, *a); err != nil {
+			if err := s.authorizePublish(tx, *a); err != nil {
 				return err
 			}
 		}
@@ -457,41 +483,10 @@ func (s *RaftRepository) Claim(ctx context.Context, a Actor, id string, revision
 			result = p
 			return nil
 		}
-		oldQuota, err := s.readQuota(tx, p.Owner)
-		if err != nil {
+		if err := s.moveToAccount(tx, &p, a.UID); err != nil {
 			return err
 		}
-		newOwner := Owner{"firebase", a.UID}
-		newQuota, err := s.readQuota(tx, newOwner)
-		if err != nil && !raftMissing(err) {
-			return err
-		}
-		if newQuota.Count >= s.limit(newOwner) {
-			return ErrQuota
-		}
-		if oldQuota.Count < 1 {
-			return ErrConflict
-		}
-		if p.ChargedBytes <= 0 || p.ChargedBytes > oldQuota.ChargedBytes {
-			return ErrConflict
-		}
-		if !fitsBytes(newQuota.ChargedBytes, p.ChargedBytes, s.byteLimit(newOwner)) {
-			return ErrQuota
-		}
-		oldQuota.Count--
-		oldQuota.ChargedBytes -= p.ChargedBytes
-		newQuota.Count++
-		newQuota.ChargedBytes += p.ChargedBytes
-		if err := tx.Set(s.raftRef("quotas", ownerKey(p.Owner)), oldQuota); err != nil {
-			return err
-		}
-		if err := tx.Set(s.raftRef("quotas", ownerKey(newOwner)), newQuota); err != nil {
-			return err
-		}
-		p.Owner, p.ExpiresAt = newOwner, nil
-		p.OwnerKey = ownerKey(newOwner)
-		p.Revision++
-		if err := tx.Set(s.raftRef("projects", id), p); err != nil {
+		if err := s.clearTransfer(tx, id); err != nil {
 			return err
 		}
 		result = p
@@ -546,6 +541,9 @@ func (s *RaftRepository) Tombstone(ctx context.Context, a Actor, id string, revi
 		p.Status = "deleted"
 		p.Revision++
 		p.PolicyRevision++
+		if err := s.clearTransfer(tx, id); err != nil {
+			return err
+		}
 		return tx.Set(s.raftRef("projects", id), p) // retain slug tombstone
 	})
 }

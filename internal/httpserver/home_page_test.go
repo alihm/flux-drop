@@ -28,3 +28,20 @@ func TestHomePage(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentGuide(t *testing.T) {
+	h := AgentGuide()
+	for _, method := range []string{"GET", "HEAD"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(method, "/agents", nil))
+		if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" || !strings.Contains(w.Header().Get("Content-Security-Policy"), "style-src 'sha256-") {
+			t.Fatal(method, w.Code, w.Header())
+		}
+		if method == "GET" && (!strings.Contains(w.Body.String(), "api/agent/projects") || !strings.Contains(w.Body.String(), "claimURL")) {
+			t.Fatal("missing agent instructions")
+		}
+		if method == "HEAD" && w.Body.Len() != 0 {
+			t.Fatal("HEAD body")
+		}
+	}
+}

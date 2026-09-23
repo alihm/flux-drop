@@ -53,6 +53,14 @@ code{font-size:.9em;padding:1px 5px;border-radius:5px;background:var(--surface-s
 .kicker{margin:0 0 6px;color:var(--accent-text);font:600 12px var(--mono);letter-spacing:1.2px;text-transform:uppercase}
 main{display:grid;grid-template-columns:minmax(0,1fr);row-gap:96px;padding:64px 0 24px}
 .intro{text-align:center;max-width:760px;margin:0 auto}
+.transfer-claim{display:flex;align-items:center;justify-content:space-between;gap:24px;margin:20px auto 28px;padding:22px 26px;max-width:760px;border:1px solid var(--accent);border-radius:16px;background:var(--surface)}
+.transfer-claim[hidden]{display:none}
+.transfer-claim h2{margin:3px 0 6px;font-size:22px}
+.transfer-claim p{margin:0;color:var(--text-muted)}
+.transfer-claim #transfer-status{margin-top:8px}
+.agent-guide{max-width:900px;padding-top:70px;padding-bottom:90px}.agent-guide h1{max-width:720px}.agent-guide .lede{max-width:720px;margin-bottom:48px}.agent-guide section{padding:28px 0;border-top:1px solid var(--border)}.agent-guide section h2{font-size:24px}.agent-guide section p{color:var(--text-muted);line-height:1.7}.agent-guide pre{padding:18px;overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface-sunken);color:var(--text);line-height:1.6}.agent-guide pre code{padding:0;border:0;background:none;color:inherit}
+.agent-key-create{display:flex;align-items:center;gap:12px;margin-top:22px}.agent-key-create input{min-width:0;flex:1}.agent-key-secret{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:18px 0;padding:16px;border:1px solid var(--warn);border-radius:10px;background:var(--warn-soft)}.agent-key-secret p{width:100%;margin:0}.agent-key-secret input{flex:1;min-width:180px}.agent-key-list{display:grid;gap:10px;margin-top:16px}.agent-key-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--surface)}.agent-key-row span{color:var(--text-muted);font-size:13px}.agent-key-row strong{display:block;margin-bottom:3px}.agent-key-row button{flex:none}@media(max-width:620px){.agent-key-create{flex-wrap:wrap}.agent-key-create label{width:100%}.agent-key-create button{width:100%}.agent-key-row{align-items:flex-start;flex-direction:column}}
+@media(max-width:620px){.transfer-claim{flex-direction:column;align-items:stretch}}
 h1{font-size:clamp(42px,5.6vw,66px);line-height:1.04;letter-spacing:-.045em;margin:0 0 18px;font-weight:780;text-wrap:balance}
 h1 em{font-style:normal;color:var(--accent-text)}
 h2,h3{text-wrap:balance}

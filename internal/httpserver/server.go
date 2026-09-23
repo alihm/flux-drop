@@ -44,6 +44,8 @@ func NewWithDependencies(c Config, dependencies Dependencies) (http.Handler, err
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/{$}", HomePageWithAuth(dependencies.FirebaseWeb))
+	mux.Handle("GET /agents", AgentGuide())
+	mux.Handle("HEAD /agents", AgentGuide())
 	mux.Handle("/unlock/", UnlockPage())
 	var privateAccess PrivateAccess
 	if dependencies.Sessions != nil {
