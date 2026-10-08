@@ -10,7 +10,7 @@ import (
 func TestFirestoreExpiryReleasesQuotaOnce(t *testing.T) {
 	r := testRepo(t)
 	a := actor(t, r, "")
-	p := publish(t, &Publisher{r, t.TempDir()}, a, "expire-project", "expire me")
+	p := publish(t, &Publisher{Repository: r, DataRoot: t.TempDir()}, a, "expire-project", "expire me")
 	ctx := context.Background()
 	r.Now = func() time.Time { return p.ExpiresAt.Add(time.Second) }
 	if _, err := r.Resolve(ctx, p.Slug); !errors.Is(err, ErrNotFound) {
@@ -48,7 +48,7 @@ func TestFirestoreExpiryReleasesQuotaOnce(t *testing.T) {
 func TestFirestoreExpiryRechecksClaimedProject(t *testing.T) {
 	r := testRepo(t)
 	a := actor(t, r, "google-owner")
-	p := publish(t, &Publisher{r, t.TempDir()}, a, "claimed-project", "keep me")
+	p := publish(t, &Publisher{Repository: r, DataRoot: t.TempDir()}, a, "claimed-project", "keep me")
 	if err := r.expireProject(context.Background(), p.ID); err != nil {
 		t.Fatal(err)
 	}

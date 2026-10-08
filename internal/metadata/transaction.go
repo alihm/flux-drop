@@ -40,6 +40,33 @@ type envelope struct {
 	Data   []byte `json:"data"`
 }
 
+// Prefetch reads multiple records in one quorum request. Every cached version
+// remains in the transaction's final CAS checks; existing reads are never replaced.
+func (t *Tx) Prefetch(keys []string) error {
+	pending := make([]string, 0, len(keys))
+	seen := map[string]bool{}
+	for _, key := range keys {
+		if _, ok := t.reads[key]; !ok && !seen[key] {
+			pending = append(pending, key)
+			seen[key] = true
+		}
+	}
+	if len(t.reads)+len(pending) > 128 {
+		return kv.ErrCapacity
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	values, err := t.backend.Read(t.ctx, pending)
+	if err != nil {
+		return err
+	}
+	for _, key := range pending {
+		t.reads[key] = values[key]
+	}
+	return nil
+}
+
 func Encode(value any) ([]byte, error) {
 	var b bytes.Buffer
 	if err := gob.NewEncoder(&b).Encode(value); err != nil {

@@ -77,8 +77,11 @@ entrypoint. It deliberately leaves filesystem garbage for the future GC worker.
 
 ## Ownership, expiry and quotas
 
-Anonymous expiry is 30 days from activation, rounded to Firestore's microsecond
+Anonymous expiry is 7 days from activation, rounded to Firestore's microsecond
 precision. Updates retain the original expiry, name and six-character suffix.
+Existing projects retain their recorded expiry; this policy applies to new
+projects. The **Claim it** button opens the sign-in dialog before Google
+authentication, then resumes claiming after successful sign-in.
 Claiming requires both the anonymous ownership identity and a verified Google
 UID; it moves quota accounting and removes expiry atomically. Authenticated
 publication is claimed automatically. Another device can recover those projects

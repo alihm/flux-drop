@@ -360,3 +360,21 @@ func syncTree(root string) error {
 	}
 	return nil
 }
+
+// SyncVersion verifies an already installed version and makes its files and
+// directory entries locally durable before a storage receipt is acknowledged.
+func SyncVersion(directory, digest string) error {
+	if _, err := VerifyVersion(directory, digest); err != nil {
+		return err
+	}
+	if err := syncTree(directory); err != nil {
+		return err
+	}
+	for i := 0; i < 4; i++ {
+		directory = filepath.Dir(directory)
+		if err := syncPath(directory); err != nil {
+			return err
+		}
+	}
+	return nil
+}

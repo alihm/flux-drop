@@ -71,3 +71,14 @@ func (g *diskAdmission) acquire(limits content.Limits) (func(), error) {
 		once.Do(func() { g.mu.Lock(); defer g.mu.Unlock(); g.reservedBytes -= bytes; g.reservedInodes -= inodes })
 	}, nil
 }
+
+// StorageAdmission holds process-local disk/inode reservations for a private
+// upload staging volume. Remote storage services use the same conservative guard.
+type StorageAdmission struct{ disk *diskAdmission }
+
+func NewStorageAdmission(root string) *StorageAdmission {
+	return &StorageAdmission{disk: newDiskAdmission(root)}
+}
+func (s *StorageAdmission) Acquire(limits content.Limits) (func(), error) {
+	return s.disk.acquire(limits)
+}

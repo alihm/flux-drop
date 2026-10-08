@@ -13,6 +13,7 @@ import (
 
 type RaftRepository struct {
 	Store                                *metadata.Store
+	StorageOffers                        func() []StorageOffer
 	Now                                  func() time.Time
 	AnonymousLimit, AccountLimit         int64
 	AnonymousByteLimit, AccountByteLimit int64
@@ -55,6 +56,7 @@ func contentOnlyProjectChange(old, next Project) bool {
 	allowed.ActiveDigest, allowed.ActiveBytes = next.ActiveDigest, next.ActiveBytes
 	allowed.ChargedBytes, allowed.Revision = next.ChargedBytes, next.Revision
 	allowed.PendingOperation = next.PendingOperation
+	allowed.UpdatedAt = next.UpdatedAt
 	if old.Status == "reserved" && next.Status == "active" {
 		allowed.Status = next.Status
 		allowed.CreatedAt = next.CreatedAt

@@ -51,10 +51,23 @@ require acceptance on the deployed hostname.
   foundation. Automated retirement/deletion and generation-layout publication are
   **not enabled**; retained bytes are not refunded without verified reclamation.
 
+## Multi-app storage
+
+For fresh deployments, the same image supports `DROP_ROLE=primary` and
+`DROP_ROLE=secondary`. The primary owns auth, metadata, quotas and app placement,
+and serves remote files through a bounded private cache. Each project stays on
+one secondary app; uploads acknowledge one verified/fsynced instance while
+Flux/Syncthing replicates `/data` asynchronously. Secondary storage APIs require
+both the primary's discovered source IP and an app-specific key over verified
+TLS. See [deployment settings, guarantees and added endpoints](docs/STORAGE_POOL.md).
+
+Primary apps provide a [wallet-authenticated storage dashboard](docs/ADMIN.md) at `/admin/`, with app search, capacity, replica health, and safe drain/removal controls.
+
 ## Runtime
 
-Automatic deployment uses one private `DROP_CLUSTER_PASSPHRASE`, two volumes and
-no per-node manifests. See [Flux deployment](docs/FLUX_DEPLOYMENT.md) for port
+Automatic deployment uses one private `DROP_CLUSTER_PASSPHRASE`, three replicas,
+and `r:/data|ml:state:/var/lib/drop-cluster` on FluxOS 8.19.0 or later; no
+per-node manifests are needed. See [Flux deployment](docs/FLUX_DEPLOYMENT.md) for port
 mappings, bootstrap assumptions and remaining live acceptance tests. One image
 supervises the app, Nginx and coordinator. Raft handles coordination/security;
 content writes use local-durable asynchronous acknowledgements. Firebase remains

@@ -29,7 +29,7 @@
   }
 }</code></pre>
   <p>Use <code>publish_html</code> for a generated HTML document. For local files, pass paths relative to <code>DROP_MCP_ROOT</code>; the folder tool requires <code>index.html</code> at the folder root and rejects symlinks, dotfiles, and unsupported paths. The API key is read from the file on each publish, so rotating or revoking it does not require rebuilding the image. Keep the key out of tool arguments and source control.</p></section>
-  <section><h2>Publish without an API key</h2><p>Start an anonymous session and keep the returned cookie and CSRF token together. Use a single session across retries. The site expires after 30 days unless the human recipient claims it.</p>
+  <section><h2>Publish without an API key</h2><p>Start an anonymous session and keep the returned cookie and CSRF token together. Use a single session across retries. The site expires after 7 days unless the human recipient claims it.</p>
 <pre><code>curl -c cookies.txt -X POST 'https://YOUR-DROP-ORIGIN/api/session' \
   -H 'Origin: https://YOUR-DROP-ORIGIN'
 # Read csrfToken from that JSON response, then:

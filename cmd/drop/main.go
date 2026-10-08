@@ -15,14 +15,17 @@ import (
 
 	firebase "firebase.google.com/go/v4"
 
+	"github.com/runonflux/flux-drop/internal/admin"
 	"github.com/runonflux/flux-drop/internal/cluster"
 	"github.com/runonflux/flux-drop/internal/content"
 	"github.com/runonflux/flux-drop/internal/firebaseconfig"
 	"github.com/runonflux/flux-drop/internal/httpserver"
 	"github.com/runonflux/flux-drop/internal/metadata"
+	"github.com/runonflux/flux-drop/internal/preview"
 	"github.com/runonflux/flux-drop/internal/project"
 	"github.com/runonflux/flux-drop/internal/replica"
 	"github.com/runonflux/flux-drop/internal/session"
+	"github.com/runonflux/flux-drop/internal/storagepool"
 )
 
 func main() {
@@ -40,6 +43,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	storageConfig, err := storagepool.FromEnv(get)
+	if err != nil {
+		return err
+	}
+	if storageConfig.Role == "secondary" {
+		return runSecondary(storageConfig)
+	}
 	legacy, err := legacyMetadata(get)
 	if err != nil {
 		return err
@@ -52,9 +62,26 @@ func run() error {
 		if err := validateStorage(publishing); err != nil {
 			return err
 		}
-		if err := httpserver.StorageReady(publishing.root, "/var/lib/drop-cluster/staging", content.DefaultLimits()); err != nil {
+		if err := httpserver.StorageReady(publishing.root, cluster.StateDirectory+"/staging", content.DefaultLimits()); err != nil {
 			return fmt.Errorf("storage not ready: %w", err)
 		}
+	}
+	var storage *storagepool.Pool
+	var storageDone chan struct{}
+	var stopStorage context.CancelFunc
+	if storageConfig.Role == "primary" {
+		if legacy || !publishing.enabled || len(get("DROP_CLUSTER_PASSPHRASE")) < 32 {
+			return errors.New("primary storage role requires automatic Raft and publishing")
+		}
+		storage, err = storagepool.NewPool(storageConfig, cluster.StateDirectory+"/storage-cache")
+		if err != nil {
+			return err
+		}
+		workerCtx, cancel := context.WithCancel(context.Background())
+		stopStorage = cancel
+		storageDone = make(chan struct{})
+		go func() { defer close(storageDone); storage.Run(workerCtx) }()
+		defer func() { stopStorage(); <-storageDone; storage.Close() }()
 	}
 	projectID := firebaseconfig.ProjectFromEnv(os.Getenv)
 	if err := session.ValidateEnvironment(get("DROP_ENV"), projectID, os.Getenv("FIRESTORE_EMULATOR_HOST"), os.Getenv("FIREBASE_AUTH_EMULATOR_HOST")); err != nil {
@@ -90,7 +117,7 @@ func run() error {
 		if c.ContentDir != publishing.root {
 			return errors.New("coordinator and publisher content roots must match")
 		}
-		if c.Automatic && get("DROP_PEERS_ENABLED") != "false" {
+		if storage == nil && c.Automatic && get("DROP_PEERS_ENABLED") != "false" {
 			peerConfig = &replica.RuntimeConfig{App: c.App, Instance: c.Local.ID, DataRoot: c.ContentDir, Certificate: c.Certificate, Key: c.Key, CA: c.CA, Port: cluster.AutoContentPort, ListenPort: cluster.AutoContentPort, Self: c.SelfIPs}
 		}
 		client, err := cluster.NewClient(c)
@@ -109,17 +136,42 @@ func run() error {
 		store := &metadata.Store{Backend: client}
 		dependencies.Sessions = &session.Service{Store: &session.RaftStore{Store: store, CreationsPerMinute: budget}, Verifier: verifier}
 		raftProjects := &project.RaftRepository{Store: store, AnonymousByteLimit: publishing.anonymousBytes, AccountByteLimit: publishing.accountBytes}
+		if storage != nil {
+			storage.BindMetadata(store)
+			adminService, err := admin.New(store, get("DROP_PUBLIC_ORIGIN"), get("DROP_ADMIN_ZELID"))
+			if err != nil {
+				return err
+			}
+			dependencies.Admin = adminService.Handler(admin.Source{Snapshot: storage.Dashboard, Change: func(tx *metadata.Tx, name, action string) error {
+				err := storage.ChangeApp(tx, name, action)
+				if errors.Is(err, storagepool.ErrAppInUse) {
+					return admin.ErrAppInUse
+				}
+				if errors.Is(err, storagepool.ErrUnknownApp) {
+					return admin.ErrUnknownApp
+				}
+				return err
+			}})
+			raftProjects.StorageOffers = storage.Offers
+			dependencies.StorageStatus = storage.AdminHandlerWithOperations(store)
+		}
 		projects = raftProjects
 		if maintenanceEnabled == "true" {
 			maintenance = raftProjects
 		}
 		if publishing.enabled {
 			dependencies.Projects = &project.Publisher{Repository: projects, DataRoot: publishing.root}
-			dependencies.StagingRoot = "/var/lib/drop-cluster/staging"
+			if storage != nil {
+				dependencies.Projects.Installer = storage
+			}
+			dependencies.StagingRoot = cluster.StateDirectory + "/staging"
 			storageReady := httpserver.CachedReadiness(func(context.Context) error {
 				return httpserver.StorageReady(publishing.root, dependencies.StagingRoot, content.DefaultLimits())
 			})
 			dependencies.Readiness = func(ctx context.Context) error {
+				if storage != nil && len(storage.Offers()) == 0 {
+					return project.ErrStorage
+				}
 				if err := storageReady(ctx); err != nil {
 					return err
 				}
@@ -152,9 +204,9 @@ func run() error {
 		projects = legacyProjects
 		if publishing.enabled {
 			dependencies.Projects = &project.Publisher{Repository: projects, DataRoot: publishing.root}
-			dependencies.StagingRoot = "/var/lib/drop-cluster/staging"
+			dependencies.StagingRoot = cluster.StateDirectory + "/staging"
 			dependencies.Readiness = httpserver.CachedReadiness(func(ctx context.Context) error {
-				if err := httpserver.StorageReady(publishing.root, "/var/lib/drop-cluster/staging", content.DefaultLimits()); err != nil {
+				if err := httpserver.StorageReady(publishing.root, cluster.StateDirectory+"/staging", content.DefaultLimits()); err != nil {
 					return err
 				}
 				_, err := store.Collection("drop_projects").Doc("readiness-probe").Get(ctx)
@@ -171,6 +223,10 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	var peerErrors <-chan error
+	if storage != nil {
+		dependencies.Fallback = storage
+		peerConfig = nil
+	}
 	if peerConfig != nil {
 		if publishing.enabled && peerConfig.DataRoot != publishing.root {
 			return errors.New("peer and publisher data roots must match")
@@ -188,6 +244,31 @@ func run() error {
 		}()
 		dependencies.Fallback = peers.Fallback
 		peerErrors = peers.Errors()
+	}
+	if storage != nil && dependencies.Projects != nil {
+		raftProjects := projects.(*project.RaftRepository)
+		assets := func(w http.ResponseWriter, r *http.Request, p project.Project, name string) {
+			storage.ServeAuthorizedProject(w, r, p, name, func(ctx context.Context) error {
+				current, err := projects.Resolve(ctx, p.Slug)
+				if err != nil {
+					return err
+				}
+				if current.ActiveDigest != p.ActiveDigest || current.Private != p.Private {
+					return project.ErrNotFound
+				}
+				return nil
+			})
+		}
+		previews, err := preview.New(raftProjects.Store, publishing.root+"/thumbnails", preview.BrowserRenderer(assets))
+		if err != nil {
+			return err
+		}
+		dependencies.Previews = previews
+		dependencies.Projects.Published = previews.Notify
+		previewCtx, cancelPreview := context.WithCancel(ctx)
+		previewDone := make(chan struct{})
+		go func() { defer close(previewDone); previews.Run(previewCtx) }()
+		defer func() { cancelPreview(); <-previewDone }()
 	}
 	handler, err := httpserver.NewWithDependencies(httpserver.Config{PublicOrigin: get("DROP_PUBLIC_ORIGIN"), Limits: content.DefaultLimits()}, dependencies)
 	if err != nil {

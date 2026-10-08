@@ -52,8 +52,10 @@ mode to enabled. `DROP_PUBLIC_ORIGIN` is only needed for a custom origin.
 - Public port: 8080 behind HTTPS ingress. Never expose app loopback port 8081.
 - Raft port: 8445; authenticated status/metadata/enrollment port: 8446.
 - Use the same external status-port mapping on every node; set it in the manifest.
-- Run as UID/GID 65534. State/content directories require mode 0700 and ownership
-  permitting that user to write.
+- Run as UID/GID 65534. For automatic Flux deployments, the node-local bind root
+  may be Flux-owned and mode 0777; Drop keeps actual state under its own 0700
+  `/var/lib/drop-cluster/private` directory. `/data` must remain writable for
+  both Drop and Flux replication. See [FLUX_DEPLOYMENT.md](FLUX_DEPLOYMENT.md).
 - Replicate `/data` only. The operator configures `/var/lib/drop-cluster` and all
   private certificates/credentials as unsynchronized at deployment time.
 - Keep `/tmp` writable; secrets must never be in project content or image layers.

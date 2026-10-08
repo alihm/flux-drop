@@ -209,6 +209,8 @@
   }
   let uploading = false, authenticating = false, managing = false, published = false, selecting = false, nameEdited = false;
   let currentUpload, lastPublishedProject, modalTrigger, toastTimer;
+  const signInDialog = $('sign-in-dialog');
+  let pendingSignIn;
 
   // Theme: follows the system unless the visitor picks one. Storage is optional.
   const root = document.documentElement;
@@ -259,6 +261,8 @@
     $('sign-out').hidden = !session?.authenticated && !session?.reauthenticationRequired;
     $('sign-in').disabled = authenticating || !session;
     $('sign-out').disabled = authenticating || !session;
+    $('continue-google').disabled = authenticating || !session;
+    $('close-sign-in').disabled = authenticating;
     if (!session?.authenticated) { $('agent-keys').hidden = true; $('agent-key-secret').hidden = true; $('agent-key-value').value = ''; }
   }
 
@@ -322,7 +326,7 @@
     $('publish-panel').classList.toggle('is-published', published);
     $('publish-panel').classList.toggle('has-selection', files.length > 0 && !published);
     $('drop-title').textContent = files.length && !published ? 'Change your files' : 'Drop an HTML file, ZIP, or folder';
-    $('claim-result').textContent = session?.authenticated ? 'Claim site' : 'Claim with Google';
+    $('claim-result').textContent = 'Claim it';
     $('choose-files').disabled = uploading || selecting;
     $('choose-folder').disabled = uploading || selecting;
     $('name').disabled = uploading;
@@ -689,9 +693,9 @@
       $('share-result').onclick = () => navigator.share({title: 'My site on Flux Drop', url: siteURL}).catch(() => {});
       $('claim-result').hidden = !lastPublishedProject;
       $('claim-callout').hidden = !lastPublishedProject;
-      $('claim-title').textContent = lastPublishedProject ? expiryLabel(lastPublishedProject.expiresAt) || 'Expires in 30 days' : '';
+      $('claim-title').textContent = lastPublishedProject ? expiryLabel(lastPublishedProject.expiresAt) || 'Expires in 7 days' : '';
       $('expiry').textContent = lastPublishedProject
-        ? `Unclaimed sites are kept until ${dateLabel(lastPublishedProject.expiresAt)}. Claim it with Google to keep it with no expiry and manage it from any device.`
+        ? `Unclaimed sites are kept until ${dateLabel(lastPublishedProject.expiresAt)}. Sign in to claim it, keep it with no expiry, and manage it from any device.`
         : '';
       $('result').hidden = false;
       // Collapse the upload area before scrolling so the result lands where expected.
@@ -741,7 +745,35 @@
       return false;
     } finally { authenticating = false; state(); }
   }
-  $('sign-in').onclick = () => signIn();
+  function requestSignIn(refresh = true) {
+    if (session?.authenticated) return Promise.resolve(true);
+    if (pendingSignIn || authenticating || uploading || managing || !session || !window.DropAuth || !config?.firebase) return Promise.resolve(false);
+    return new Promise(resolve => {
+      pendingSignIn = {resolve, refresh};
+      $('sign-in-status').textContent = '';
+      signInDialog.showModal();
+      $('continue-google').focus();
+    });
+  }
+  signInDialog.addEventListener('close', () => {
+    const pending = pendingSignIn;
+    pendingSignIn = null;
+    pending?.resolve(false);
+  });
+  signInDialog.addEventListener('cancel', event => { if (authenticating) event.preventDefault(); });
+  $('close-sign-in').onclick = () => { if (!authenticating) signInDialog.close(); };
+  $('continue-google').onclick = async () => {
+    const pending = pendingSignIn;
+    if (!pending || authenticating) return;
+    $('sign-in-status').textContent = 'Complete sign-in in the Google window.';
+    // Keep the provider popup in this explicit click's user gesture.
+    const success = await signIn(pending.refresh);
+    if (!success) { $('sign-in-status').textContent = $('auth-status').textContent; return; }
+    pendingSignIn = null;
+    signInDialog.close();
+    pending.resolve(true);
+  };
+  $('sign-in').onclick = () => requestSignIn();
   $('sign-out').onclick = async () => {
     if (authenticating || uploading || managing || !session) return;
     if (!window.confirm('Sign out? Unclaimed sites in this browser will no longer be available. Claim them first to keep access.')) return;
@@ -773,8 +805,8 @@
 
   async function claimProject(project, message) {
     if (authenticating || managing || uploading || !session || !project.expiresAt) return;
-    if (!session.authenticated && !await signIn(false)) {
-      message.textContent = 'Sign in with Google to finish claiming this project.';
+    if (!session.authenticated && !await requestSignIn(false)) {
+      message.textContent = 'Sign in to claim this project.';
       return;
     }
     managing = true;
@@ -804,7 +836,7 @@
 
   $('redeem-transfer').onclick = async () => {
     if (!transferToken || !session || managing || authenticating) return;
-    if (!session.authenticated && !await signIn(false)) {
+    if (!session.authenticated && !await requestSignIn(false)) {
       $('transfer-status').textContent = 'Sign in to finish claiming this site.';
       return;
     }
@@ -837,6 +869,7 @@
     const card = document.createElement('article');
     card.className = 'project-card';
     card.dataset.projectId = project.id;
+    if (config?.exploreEnabled) card.append(thumbnail(project));
     const top = document.createElement('div'); top.className = 'card-top';
     const heading = document.createElement('h3');
     const link = document.createElement('a'); link.href = path; link.textContent = project.slug; link.target = '_blank'; link.rel = 'noopener noreferrer'; heading.append(link);
@@ -912,6 +945,68 @@
   }
   $('refresh-projects').onclick = () => listProjects();
   $('more-projects').onclick = () => listProjects(true);
+
+  const thumbnailURLs = new Set();
+  const thumbnailObserver = 'IntersectionObserver' in window ? new IntersectionObserver(entries => {
+    for (const entry of entries) if (entry.isIntersecting) { thumbnailObserver.unobserve(entry.target); entry.target.loadPreview?.(); }
+  }, {rootMargin: '120px'}) : null;
+  function thumbnail(project) {
+    const frame = document.createElement('div'); frame.className = 'site-thumbnail pending';
+    const label = document.createElement('span'); label.className = 'thumbnail-label'; label.textContent = 'Preview preparing'; frame.append(label);
+    const version = project.digest || project.thumbnail?.split('?v=')[1];
+    if (!/^[a-f0-9]{32}$/.test(project.id) || !/^[a-f0-9]{64}$/.test(version || '')) { label.textContent = 'Site preview'; return frame; }
+    const src = '/api/projects/' + project.id + '/thumbnail?v=' + version;
+    let attempts = 0;
+    frame.loadPreview = async () => {
+      if (!frame.isConnected) return;
+      try {
+        const response = await fetch(src, {cache: 'no-store', credentials: 'same-origin', signal: AbortSignal.timeout(12000)});
+        if (!frame.isConnected) return;
+        if (!response.ok) { label.textContent = 'Preview unavailable'; frame.classList.remove('pending'); return; }
+        if (response.headers.get('X-Drop-Preview') !== 'ready') {
+          if (++attempts <= 6) window.setTimeout(frame.loadPreview, Math.min(30000, 2000 * 2 ** attempts));
+          return;
+        }
+        if (!response.headers.get('Content-Type')?.startsWith('image/jpeg')) throw new Error('Invalid thumbnail');
+        const url = URL.createObjectURL(await response.blob()); thumbnailURLs.add(url);
+        const img = document.createElement('img'); img.src = url; img.alt = 'Preview of ' + project.slug; img.decoding = 'async'; img.width = 320; img.height = 180;
+        img.onload = () => { URL.revokeObjectURL(url); thumbnailURLs.delete(url); };
+        img.onerror = () => { URL.revokeObjectURL(url); thumbnailURLs.delete(url); frame.replaceChildren(label); label.textContent = 'Preview unavailable'; };
+        frame.classList.remove('pending'); frame.replaceChildren(img);
+      } catch { if (frame.isConnected) { label.textContent = 'Preview unavailable'; frame.classList.remove('pending'); } }
+    };
+    if (thumbnailObserver) thumbnailObserver.observe(frame);
+    else window.setTimeout(frame.loadPreview, 0);
+    return frame;
+  }
+  window.addEventListener('pagehide', () => { for (const url of thumbnailURLs) URL.revokeObjectURL(url); thumbnailURLs.clear(); });
+  let exploring = false;
+  async function loadExplore() {
+    if (!config?.exploreEnabled || exploring) return;
+    exploring = true; $('refresh-explore').disabled = true;
+    $('explore').hidden = false; $('explore-nav').hidden = false;
+    $('explore-status').textContent = 'Finding the latest deployments…';
+    try {
+      const response = await fetch('/api/explore', {cache: 'no-store'});
+      if (!response.ok) throw new Error('Could not load deployments. Try refreshing.');
+      const data = await response.json(); const cards = [];
+      for (const project of (data.projects || []).slice(0, 24)) {
+        const path = projectPath(project); if (!path || !/^[a-f0-9]{32}$/.test(project.id) || project.private || project.claimed !== true) continue;
+        const card = document.createElement('a'); card.className = 'explore-card'; card.href = path; card.target = '_blank'; card.rel = 'noopener noreferrer';
+        card.setAttribute('aria-label', 'Open ' + project.slug + ' in a new tab'); card.append(thumbnail(project));
+        const info = document.createElement('div'); info.className = 'explore-card-info';
+        const title = document.createElement('h3'); title.textContent = project.slug.slice(0, -7).replace(/-/g, ' ');
+        const arrow = document.createElement('span'); arrow.className = 'explore-arrow'; arrow.textContent = '↗'; arrow.setAttribute('aria-hidden', 'true');
+        const meta = document.createElement('p'); meta.textContent = 'Deployed ' + (ageLabel(project.updatedAt) || 'recently');
+        info.append(title, arrow, meta); card.append(info); cards.push(card);
+      }
+      for (const frame of $('explore-list').querySelectorAll('.site-thumbnail')) thumbnailObserver?.unobserve(frame);
+      $('explore-list').replaceChildren(...cards);
+      $('explore-status').textContent = cards.length ? '' : 'The next great idea could be yours. Publish a public site to get things started.';
+    } catch (error) { $('explore-status').textContent = error.message; }
+    finally { exploring = false; $('refresh-explore').disabled = false; }
+  }
+  $('refresh-explore').onclick = () => loadExplore();
 
   function field(parent, labelText, type, value = '') {
     const label = document.createElement('label'); label.textContent = labelText;
@@ -998,7 +1093,7 @@
     });
 
     const accessTitle = document.createElement('h3'); accessTitle.textContent = project.private ? 'Private access' : 'Public access'; accessPanel.append(accessTitle);
-    note(accessPanel, project.private ? 'Visitors need the password to open this site.' : 'Anyone with this URL can view the site.');
+    note(accessPanel, project.private ? 'Visitors need the password to open this site. It stays out of Explore.' : 'Anyone with this URL can view the site. Claimed public sites can appear in Explore.');
     const password = field(accessPanel, project.private ? 'New site password' : 'Password for private access', 'password');
     password.autocomplete = 'new-password'; password.maxLength = 1024; passwordInputs.push(password);
     note(accessPanel, 'Use at least 12 characters. Private sites currently support only self-contained index.html pages, without separate assets.');
@@ -1007,7 +1102,7 @@
       perform('PUT', '/privacy', {private: true, password: password.value});
     });
     if (project.private) addButton(accessPanel, 'Make public', 'secondary', () => {
-      if (window.confirm('Make this site public? Anyone with its link will be able to view it.')) perform('PUT', '/privacy', {private: false});
+      if (window.confirm('Make this site public? Anyone can view it, and claimed sites can appear in Explore.')) perform('PUT', '/privacy', {private: false});
     });
 
     const siteURL = new URL('/' + project.slug + '/', window.location.origin).href;
@@ -1024,7 +1119,7 @@
     if (project.expiresAt) {
       const transferBox = document.createElement('div'); transferBox.className = 'danger-zone'; sharePanel.append(transferBox);
       const transferTitle = document.createElement('h3'); transferTitle.textContent = 'Give this site to someone'; transferBox.append(transferTitle);
-      note(transferBox, 'Create a one-use claim link for another person. They must sign in with Google within 24 hours. Creating a new link invalidates the old one.');
+      note(transferBox, 'Create a one-use claim link for another person. They must sign in to claim it within 24 hours. Creating a new link invalidates the old one.');
       const transferOutput = field(transferBox, 'One-use claim link', 'text'); transferOutput.readOnly = true; transferOutput.hidden = true;
       const makeTransfer = addButton(transferBox, 'Create claim link', 'secondary', async () => {
         makeTransfer.disabled = true;
@@ -1078,6 +1173,8 @@
       const response = await fetch('/api/config', {cache: 'no-store'});
       if (!response.ok) throw new Error('Service configuration is unavailable. Refresh this page to retry.');
       config = await response.json();
+      if (config.exploreEnabled) $('private-help').textContent = 'Private sites need a password and stay out of Explore. Claimed public sites appear in Explore.';
+      if (config.exploreEnabled) void loadExplore();
       if (config.firebase && window.DropAuth) window.DropAuth.init(config.firebase);
       const megabytes = `${Math.floor(config.limits.uploadBytes / 1048576)} MiB`, fileCount = config.limits.files.toLocaleString();
       $('limits').textContent = `Up to ${megabytes} · ${fileCount} files`;

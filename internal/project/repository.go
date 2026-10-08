@@ -13,6 +13,8 @@ import (
 	"github.com/runonflux/flux-drop/internal/session"
 )
 
+const anonymousProjectLifetime = 7 * 24 * time.Hour
+
 var (
 	ErrNotFound  = errors.New("project not found")
 	ErrConflict  = errors.New("project revision or reservation conflict")
@@ -63,6 +65,7 @@ func (a Actor) Owns(o Owner) bool {
 
 type Project struct {
 	ID               string     `firestore:"id" json:"id"`
+	StorageApp       string     `firestore:"storageApp" json:"-"`
 	Owner            Owner      `firestore:"owner" json:"owner"`
 	OwnerKey         string     `firestore:"ownerKey" json:"-"`
 	Slug             string     `firestore:"slug" json:"slug"`
@@ -80,6 +83,7 @@ type Project struct {
 	Status           string     `firestore:"status" json:"status"`
 	PendingOperation string     `firestore:"pendingOperation" json:"-"`
 	CreatedAt        time.Time  `firestore:"createdAt" json:"createdAt"`
+	UpdatedAt        time.Time  `firestore:"updatedAt" json:"updatedAt"`
 	ExpiresAt        *time.Time `firestore:"expiresAt" json:"expiresAt"`
 }
 
@@ -90,6 +94,7 @@ func (p Project) Live(now time.Time) bool {
 type Reservation struct {
 	Key, ProjectID, Name, Digest string
 	Bytes, ExpectedRevision      int64
+	Files                        int `json:"-"`
 }
 type Operation struct {
 	ID           string    `firestore:"id"`

@@ -43,9 +43,9 @@ func HomePageWithAuth(auth *FirebaseWebConfig) http.Handler {
 	}
 	page := template.Must(template.New("home").Parse(string(html)))
 	hash := func(b []byte) string { sum := sha256.Sum256(b); return base64.StdEncoding.EncodeToString(sum[:]) }
-	csp := "default-src 'none'; script-src 'sha256-" + hash(js) + "'; style-src 'sha256-" + hash(css) + "'; img-src data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+	csp := "default-src 'none'; script-src 'sha256-" + hash(js) + "'; style-src 'sha256-" + hash(css) + "'; img-src 'self' data: blob:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
 	if auth != nil {
-		csp = "default-src 'none'; script-src 'sha256-" + hash(js) + "' https://apis.google.com; style-src 'sha256-" + hash(css) + "'; img-src data:; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://apis.google.com https://" + auth.AuthDomain + "; frame-src https://" + auth.AuthDomain + "; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+		csp = "default-src 'none'; script-src 'sha256-" + hash(js) + "' https://apis.google.com; style-src 'sha256-" + hash(css) + "'; img-src 'self' data: blob:; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://apis.google.com https://" + auth.AuthDomain + "; frame-src https://" + auth.AuthDomain + "; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {

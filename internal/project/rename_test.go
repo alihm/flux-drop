@@ -14,7 +14,7 @@ func TestFirestoreRenameAndUpdate(t *testing.T) {
 	r := testRepo(t)
 	a := actor(t, r, "")
 	other := actor(t, r, "")
-	pub := &Publisher{r, t.TempDir()}
+	pub := &Publisher{Repository: r, DataRoot: t.TempDir()}
 	ctx := context.Background()
 	original := publish(t, pub, a, "rename-publish", "original")
 	renamed, err := r.Rename(ctx, a, original.ID, "new-name", original.Revision)

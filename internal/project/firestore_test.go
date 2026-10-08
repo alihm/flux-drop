@@ -68,7 +68,7 @@ func TestFirestorePublishUpdateDedupAndDelete(t *testing.T) {
 	r := testRepo(t)
 	a := actor(t, r, "")
 	other := actor(t, r, "")
-	p := &Publisher{r, t.TempDir()}
+	p := &Publisher{Repository: r, DataRoot: t.TempDir()}
 	ctx := context.Background()
 	first := publish(t, p, a, "first-publish", "first")
 	if first.Revision != 1 || first.ExpiresAt == nil {
@@ -123,7 +123,7 @@ func TestFirestoreClaimAndOwnershipQueries(t *testing.T) {
 	r := testRepo(t)
 	a := actor(t, r, "")
 	other := actor(t, r, "other-user")
-	p := &Publisher{r, t.TempDir()}
+	p := &Publisher{Repository: r, DataRoot: t.TempDir()}
 	ctx := context.Background()
 	first := publish(t, p, a, "claim-project", "claim me")
 	if _, err := r.Claim(ctx, other, first.ID, 1); !errors.Is(err, ErrNotFound) {
@@ -265,7 +265,7 @@ func TestFirestoreFailedInstallRecoveryAndExpiryBlocksClaim(t *testing.T) {
 		t.Fatal(err)
 	}
 	staged, _ := content.StageHTML(filepath.Join(root, "staging"), strings.NewReader("data"), content.DefaultLimits())
-	p := &Publisher{r, root}
+	p := &Publisher{Repository: r, DataRoot: root}
 	if _, err := p.Publish(ctx, a, Reservation{Key: "failed-install"}, staged); err == nil {
 		t.Fatal("failed filesystem activated metadata")
 	}

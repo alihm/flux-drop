@@ -1,7 +1,8 @@
 # Passphrase-only Flux deployment
 
 This applies to the new source/local image, not previously published Docker Hub
-tags. One component runs Nginx, the application and the coordinator.
+tags. One component runs Nginx, the application and the coordinator. Deploy
+**three replicas** on FluxOS 8.19.0 or later.
 
 ## Configuration
 
@@ -34,13 +35,42 @@ The dedicated ports must be available and identical across nodes. The image does
 not infer arbitrary encrypted-spec port mappings. Never expose loopback port 8081
 or route private cluster endpoints through public Nginx.
 
+Set **Container Data** to exactly:
+
+```text
+r:/data|ml:state:/var/lib/drop-cluster
+```
+
+The `ml:` mount must be supported on every Flux node eligible to host this app.
+It is a persistent directory excluded from Syncthing by the Flux application
+specification. Do not use `m:state:`: plain `m:` directories are replicated when
+the component's primary mount has `r:`. `ml:tmp:/tmp` is optional scratch storage,
+but it does not hold Drop's coordinator state.
+
 | Persistent volume | Replication |
 |---|---|
 | `/data` — immutable project content and deployment-existence marker | Enabled |
-| `/var/lib/drop-cluster` — ALL node-local configuration, identity, keys, journal, Raft log/snapshots, observations and upload staging | Disabled |
+| `/var/lib/drop-cluster` — node-local bind root; Drop stores ALL node-local configuration, identity, keys, journal, Raft log/snapshots, observations and upload staging under its private child `/var/lib/drop-cluster/private` | Disabled |
 
-The operator configures Flux replication exclusions. Both roots need mode 0700 and
-ownership UID/GID 65534; fresh Docker volumes inherit the image's directory ownership.
+Flux derives the `state` exclusion from `ml:`. Flux creates bind directories
+with broad permissions, which override the image's directory modes. Drop runs
+as UID/GID 65534 and creates `/var/lib/drop-cluster/private` as owner-only
+`0700`; it stores every secret and Raft file there, not at the bind root.
+Drop restores owner-only modes after a redeploy before opening state, and its
+supervisor checks the private root every two seconds while running. It refuses
+symlinks, foreign-owned entries, or unmigrated old state at the bind root.
+Automatic startup refuses to run unless both paths appear as separate mount
+points inside the container. A directory that merely exists in the image is
+not persistent. This check catches a missing mount, but cannot prove that Flux
+will preserve it across redeploys or exclude it from replication. Verify those
+properties in the Flux configuration and with an actual same-host redeploy test.
+FluxOS 8.19.0 still has permission-repair paths that run `chmod -R 777` over
+the component host volume, including the `ml:` directory. Those paths must be
+fixed upstream to exclude `ml:` mounts before this can be considered a strong
+host-filesystem confidentiality boundary while the app is running: the Drop
+guard repairs widened modes, but it cannot eliminate the interval before the
+next check. Treat Flux node operators as trusted and do not use this service for high-sensitivity
+secrets until that Flux change is deployed network-wide.
 Size the node-local volume for uploads as well as Raft state: the default upload
 limits reserve roughly 700 MiB per active upload plus 1 GiB free-space headroom.
 Keep `/tmp` writable and allow up to 200 MiB per concurrent peer fallback for
@@ -63,8 +93,10 @@ Initial discovery must include this node and remain stable for 30 seconds. With
 one listed node it may initialize coordination. With multiple nodes, the lowest
 IP-hash candidate requires every listed peer to be reachable, authenticated,
 uninitialized and reporting the identical discovery view. Later nodes enroll as
-learners, catch up, and are promoted toward three voters. Deploy at least three
-replicas. Security/session writes wait for another voter during singleton startup.
+learners, catch up, and are promoted toward three voters. Security/session writes
+wait for another voter during singleton startup. With three voters, one removal
+or replacement leaves a two-voter majority able to elect a leader and admit the
+new node; with two voters, losing either one removes quorum.
 
 **Bootstrap assumption:** initial Flux discovery is trusted to describe the whole
 fresh deployment. Matching views cannot prove the absence of an unlisted old
@@ -84,6 +116,9 @@ A returning node with its original key/log and a new IP can have its address upd
 by the quorum. An empty replacement gets a new identity. Majority loss requires
 restoring enough original state or reviewed recovery; no timeout overrides security
 history and no automatic destructive rebootstrap is performed.
+If all node-local logs disappear while `/data/cluster-genesis.json` survives,
+startup refuses to create a new security history. No code-only fallback can
+reconstruct the lost committed sessions, API keys and ownership records.
 
 Content is fsynced locally before acknowledgement but may be lost after primary
 failure. Security changes wait for the ordered replication stream, including earlier

@@ -1,0 +1,33 @@
+services:
+  primary:
+    image: ${DROP_SMOKE_IMAGE:-flux-drop:storage-pool}
+    network_mode: none
+    mem_limit: 512m
+    environment:
+      DROP_ROLE: primary
+      FLUX_APP_NAME: dropprimarysmoke
+      FLUX_NODE_HOST_IP: 11.99.0.10
+      DROP_CLUSTER_PASSPHRASE: isolated-primary-cluster-secret-not-for-deployment
+      DROP_STORAGE_APPS_JSON: '[{"appName":"dropstoragesmoke","keyId":"v1","apiKey":"isolated-storage-api-key-not-for-deployment"}]'
+      DROP_CACHE_BYTES: '1048576'
+    volumes:
+      - primary-data:/data
+      - primary-state:/var/lib/drop-cluster
+  secondary:
+    image: ${DROP_SMOKE_IMAGE:-flux-drop:storage-pool}
+    network_mode: none
+    mem_limit: 256m
+    environment:
+      DROP_ROLE: secondary
+      FLUX_APP_NAME: dropstoragesmoke
+      DROP_PRIMARY_APP_NAME: dropprimarysmoke
+      DROP_STORAGE_CAPACITY_BYTES: '10737418240'
+      DROP_STORAGE_API_KEYS_JSON: '{"v1":"isolated-storage-api-key-not-for-deployment"}'
+    volumes:
+      - secondary-data:/data
+      - secondary-state:/var/lib/drop-cluster
+volumes:
+  primary-data:
+  primary-state:
+  secondary-data:
+  secondary-state:

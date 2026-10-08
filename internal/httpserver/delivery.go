@@ -29,6 +29,11 @@ func ProjectDelivery(repository projectResolver, dataRoot string) http.Handler {
 	return ProjectDeliveryWithFallback(repository, dataRoot, nil)
 }
 
+type AuthorizedProjectFallback interface {
+	RemotePrivateContent() bool
+	ServeAuthorizedProject(http.ResponseWriter, *http.Request, project.Project, string, func(context.Context) error)
+}
+
 type ProjectFallback interface {
 	ServeProject(http.ResponseWriter, *http.Request, project.Project, string)
 }
@@ -96,6 +101,33 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 		if file == "" || strings.HasSuffix(file, "/") {
 			file += "index.html"
 		}
+		if p.StorageApp != "" {
+			if fallback != nil && (!p.Private || remotePrivateFallback(fallback)) {
+				if remote, ok := fallback.(AuthorizedProjectFallback); ok {
+					remote.ServeAuthorizedProject(w, r, p, file, func(ctx context.Context) error {
+						current, err := repository.Resolve(ctx, slug)
+						if err != nil {
+							return err
+						}
+						if !current.Live(time.Now()) || current.PolicyRevision != p.PolicyRevision || current.Private != p.Private {
+							return project.ErrNotFound
+						}
+						if current.Slug != p.Slug || current.ActiveDigest != p.ActiveDigest || current.StorageApp != p.StorageApp {
+							return project.ErrStorage
+						}
+						if current.Private && (privateAccess == nil || !privateAccess(r.WithContext(ctx), current)) {
+							return project.ErrNotFound
+						}
+						return nil
+					})
+				} else {
+					fallback.ServeProject(w, r, p, file)
+				}
+			} else {
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}
+			return
+		}
 		// Deliberately verify each request for now: no readiness cache may hide
 		// partially replicated or corrupted versions. A bounded immutable
 		// readiness cache is a release performance gate, not an authorization cache.
@@ -125,4 +157,11 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 		}
 		http.NotFound(w, r)
 	})
+}
+
+// Only a remote backend invoked after the public handler's CURRENT access check
+// can serve private content. Existing same-app public peer fallback cannot.
+func remotePrivateFallback(fallback ProjectFallback) bool {
+	remote, ok := fallback.(AuthorizedProjectFallback)
+	return ok && remote.RemotePrivateContent()
 }

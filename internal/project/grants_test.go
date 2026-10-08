@@ -20,7 +20,7 @@ func TestFirestoreUnlockGrantLifecycle(t *testing.T) {
 	a := actor(t, r, "")
 	visitor := actor(t, r, "")
 	stranger := actor(t, r, "")
-	pub := &Publisher{r, t.TempDir()}
+	pub := &Publisher{Repository: r, DataRoot: t.TempDir()}
 	ctx := context.Background()
 	p := publish(t, pub, a, "unlock-publish", "private grant page")
 	privacy := &PrivacyService{Repository: r, DataRoot: pub.DataRoot, Hasher: password.NewHasher()}
@@ -94,7 +94,7 @@ func TestFirestoreUnlockSharedBudgets(t *testing.T) {
 	now := time.Now().UTC()
 	r.Now = func() time.Time { return now }
 	a := actor(t, r, "")
-	pub := &Publisher{r, t.TempDir()}
+	pub := &Publisher{Repository: r, DataRoot: t.TempDir()}
 	ctx := context.Background()
 	p := publish(t, pub, a, "budget-publish", "budget page")
 	privacy := &PrivacyService{Repository: r, DataRoot: pub.DataRoot, Hasher: password.NewHasher()}

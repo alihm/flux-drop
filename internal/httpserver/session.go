@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/runonflux/flux-drop/internal/preview"
 	"github.com/runonflux/flux-drop/internal/project"
 	"github.com/runonflux/flux-drop/internal/session"
 )
@@ -16,12 +17,15 @@ import (
 const sessionCookie = "__Host-drop-session"
 
 type Dependencies struct {
-	Sessions    *session.Service
-	Projects    *project.Publisher
-	Fallback    ProjectFallback
-	FirebaseWeb *FirebaseWebConfig
-	Readiness   func(context.Context) error
-	StagingRoot string
+	Sessions      *session.Service
+	Projects      *project.Publisher
+	Fallback      ProjectFallback
+	FirebaseWeb   *FirebaseWebConfig
+	Readiness     func(context.Context) error
+	StagingRoot   string
+	StorageStatus http.Handler
+	Admin         http.Handler
+	Previews      *preview.Service
 }
 
 func registerSessions(mux *http.ServeMux, origin string, service *session.Service) {

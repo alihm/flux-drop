@@ -22,6 +22,12 @@ import (
 )
 
 func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hasher *password.Hasher) {
+	respondProject := func(w http.ResponseWriter, p project.Project) {
+		if deps.Previews != nil {
+			deps.Previews.Notify(p)
+		}
+		projectResponse(w, p)
+	}
 	// Bounded per-instance disk/CPU concurrency; shared project quotas are in
 	// Firestore. Ingress bandwidth/IP rate limits remain a deployment requirement.
 	slots := make(chan struct{}, 4)
@@ -106,13 +112,15 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 				respond(w, 429, map[string]string{"error": "upload_busy"})
 				return
 			}
-			release, err := disk.acquire(config.Limits)
-			if err != nil {
-				w.Header().Set("Retry-After", "30")
-				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "storage_unavailable"})
-				return
+			if deps.Projects.Installer == nil {
+				release, err := disk.acquire(config.Limits)
+				if err != nil {
+					w.Header().Set("Retry-After", "30")
+					respond(w, http.StatusServiceUnavailable, map[string]string{"error": "storage_unavailable"})
+					return
+				}
+				defer release()
 			}
-			defer release()
 			if err := os.MkdirAll(stagingRoot, 0700); err != nil {
 				projectError(w, errors.Join(project.ErrStorage, err))
 				return
@@ -139,7 +147,7 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 				projectError(w, err)
 				return
 			}
-			projectResponse(w, result)
+			respondProject(w, result)
 		}
 	}
 	mux.Handle("POST /api/projects", mutate(upload(false, actor)))
@@ -249,7 +257,7 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 			projectError(w, err)
 			return
 		}
-		projectResponse(w, p)
+		respondProject(w, p)
 	}))
 	mux.Handle("PATCH /api/projects/{id}", mutate(func(w http.ResponseWriter, r *http.Request) {
 		r, cancel := bounded(r)
@@ -288,7 +296,7 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 			projectError(w, err)
 			return
 		}
-		projectResponse(w, p)
+		respondProject(w, p)
 	}))
 	mux.HandleFunc("GET /api/projects", func(w http.ResponseWriter, r *http.Request) {
 		r, cancel := bounded(r)
@@ -318,7 +326,7 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 			projectError(w, err)
 			return
 		}
-		projectResponse(w, p)
+		respondProject(w, p)
 	})
 	mux.Handle("POST /api/projects/{id}/claim", mutate(func(w http.ResponseWriter, r *http.Request) {
 		r, cancel := bounded(r)
@@ -338,7 +346,7 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 			projectError(w, err)
 			return
 		}
-		projectResponse(w, p)
+		respondProject(w, p)
 	}))
 	if transfers, ok := deps.Projects.Repository.(interface {
 		CreateTransfer(context.Context, project.Actor, string, int64) (string, time.Time, error)
@@ -401,7 +409,7 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 				projectError(w, err)
 				return
 			}
-			projectResponse(w, claimed)
+			respondProject(w, claimed)
 		}))
 	}
 	mux.Handle("DELETE /api/projects/{id}", mutate(func(w http.ResponseWriter, r *http.Request) {

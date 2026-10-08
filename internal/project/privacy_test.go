@@ -15,7 +15,7 @@ func TestFirestorePrivacyLifecycle(t *testing.T) {
 	r := testRepo(t)
 	a := actor(t, r, "")
 	other := actor(t, r, "")
-	pub := &Publisher{r, t.TempDir()}
+	pub := &Publisher{Repository: r, DataRoot: t.TempDir()}
 	ctx := context.Background()
 	p := publish(t, pub, a, "privacy-publish", "private site")
 	s := &PrivacyService{Repository: r, DataRoot: pub.DataRoot, Hasher: password.NewHasher()}

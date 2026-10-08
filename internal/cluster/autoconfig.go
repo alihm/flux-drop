@@ -23,7 +23,10 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-const StateDirectory = "/var/lib/drop-cluster"
+// Flux owns the bind-mount root and may create it mode 0777. Keep all Drop
+// state in a directory owned by the unprivileged container user beneath it.
+const StateMountDirectory = "/var/lib/drop-cluster"
+const StateDirectory = StateMountDirectory + "/private"
 const ManifestPath = StateDirectory + "/cluster-node.json"
 const PassphraseEnv = "DROP_CLUSTER_PASSPHRASE"
 
@@ -108,6 +111,18 @@ func passphraseBundle(app, passphrase string) (CABundle, error) {
 // ProvisionAutomatic is called by the supervisor before starting its children.
 // No public-network failure is interpreted as an empty/singleton deployment.
 func ProvisionAutomatic(ctx context.Context, get func(string) string) error {
+	if _, err := os.Lstat("/data/storage-identity.json"); !os.IsNotExist(err) {
+		return errors.New("primary cannot reuse a secondary volume")
+	}
+	// Flux may replace a container while keeping /data. Without a dedicated
+	// persistent node-local mount, that replacement silently creates a new
+	// identity and an empty Raft log at the address of an existing voter.
+	if err := requireAutomaticMounts(StateMountDirectory, "/data", "/proc/self/mountinfo"); err != nil {
+		return err
+	}
+	if err := prepareAutomaticStateDirectory(StateMountDirectory, StateDirectory); err != nil {
+		return err
+	}
 	for {
 		h, err := discoverHost(ctx, get)
 		if err == nil && h.App != "" && h.IP.IsValid() {

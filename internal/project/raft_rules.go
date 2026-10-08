@@ -78,6 +78,10 @@ func (s *RaftRepository) Reserve(ctx context.Context, a Actor, r Reservation) (P
 	if a.AgentKeyDigest != "" && r.ProjectID != "" {
 		return Prepared{}, ErrForbidden
 	}
+	var offers []StorageOffer
+	if s.StorageOffers != nil {
+		offers = s.StorageOffers()
+	}
 	opID := operationID(a, r.Key)
 	var result Prepared
 	err := s.runContent(ctx, func(ctx context.Context, tx *raftTx) error {
@@ -121,7 +125,7 @@ func (s *RaftRepository) Reserve(ctx context.Context, a Actor, r Reservation) (P
 			}
 			p = Project{ID: opID[:32], Owner: a.Owner(), OwnerKey: ownerKey(a.Owner()), Slug: name + "-" + r.Digest[:6], InitialSuffix: r.Digest[:6], CreatedAt: now, PolicyRevision: 1, Status: "reserved"}
 			if p.Owner.Kind == "anonymous" {
-				expiry := now.Add(30 * 24 * time.Hour)
+				expiry := now.Add(anonymousProjectLifetime)
 				p.ExpiresAt = &expiry
 			}
 			if _, err := tx.Get(s.raftRef("projects", p.ID)); !raftMissing(err) {
@@ -188,6 +192,9 @@ func (s *RaftRepository) Reserve(ctx context.Context, a Actor, r Reservation) (P
 		}
 		if !fitsBytes(q.ChargedBytes, charge, s.byteLimit(p.Owner)) {
 			return ErrQuota
+		}
+		if err := s.allocateStorage(tx, &p, r, offers); err != nil {
+			return err
 		}
 		q.ChargedBytes += charge
 		p.ChargedBytes += charge
@@ -301,12 +308,13 @@ func (s *RaftRepository) activate(ctx context.Context, a Actor, opID, passwordDi
 		if op.New {
 			p.CreatedAt = s.now()
 			if p.Owner.Kind == "anonymous" {
-				expiry := p.CreatedAt.Add(30 * 24 * time.Hour)
+				expiry := p.CreatedAt.Add(anonymousProjectLifetime)
 				p.ExpiresAt = &expiry
 			}
 		}
 		p.Revision++
 		op.State = "complete"
+		p.UpdatedAt = s.now()
 		if err := tx.Set(s.raftRef("operations", opID), op); err != nil {
 			return err
 		}

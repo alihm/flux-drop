@@ -128,7 +128,7 @@ func (s *FirestoreRepository) Reserve(ctx context.Context, a Actor, r Reservatio
 			}
 			p = Project{ID: opID[:32], Owner: a.Owner(), OwnerKey: ownerKey(a.Owner()), Slug: name + "-" + r.Digest[:6], InitialSuffix: r.Digest[:6], CreatedAt: now, PolicyRevision: 1, Status: "reserved"}
 			if p.Owner.Kind == "anonymous" {
-				expiry := now.Add(30 * 24 * time.Hour)
+				expiry := now.Add(anonymousProjectLifetime)
 				p.ExpiresAt = &expiry
 			}
 			if _, err := tx.Get(s.ref("projects", p.ID)); !missing(err) {
@@ -283,12 +283,13 @@ func (s *FirestoreRepository) Activate(ctx context.Context, a Actor, opID string
 		if op.New {
 			p.CreatedAt = s.now()
 			if p.Owner.Kind == "anonymous" {
-				expiry := p.CreatedAt.Add(30 * 24 * time.Hour)
+				expiry := p.CreatedAt.Add(anonymousProjectLifetime)
 				p.ExpiresAt = &expiry
 			}
 		}
 		p.Revision++
 		op.State = "complete"
+		p.UpdatedAt = s.now()
 		if err := tx.Set(s.ref("operations", opID), op); err != nil {
 			return err
 		}

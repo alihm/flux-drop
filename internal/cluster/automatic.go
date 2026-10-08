@@ -51,7 +51,7 @@ func (a *automatic) run(ctx context.Context) {
 		bounded, cancel := context.WithTimeout(ctx, 15*time.Second)
 		if err := a.refresh(bounded); err == nil {
 			if err := a.tick(bounded, time.Now()); err != nil && ctx.Err() == nil {
-				slog.Warn("automatic cluster initialization waiting for consistent authenticated peer evidence")
+				slog.Warn("automatic cluster initialization waiting", "reason", err)
 			}
 		}
 		cancel()

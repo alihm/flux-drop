@@ -15,11 +15,21 @@ assert.match(first.id,/^[a-f0-9]{32}$/);
 assert.match(first.clusterID,/^[a-f0-9]{32}$/);
 assert.equal(first.lastIndex,0,'network-isolated node must not infer singleton bootstrap');
 const permissions=compose('exec','-T','app','stat','-c','%a %u %g',
-  '/var/lib/drop-cluster/cluster-node.json',
-  '/var/lib/drop-cluster/cluster-ca.json',
-  '/var/lib/drop-cluster/node.key',
-  '/var/lib/drop-cluster/content-journal.db');
+  '/var/lib/drop-cluster/private/cluster-node.json',
+  '/var/lib/drop-cluster/private/cluster-ca.json',
+  '/var/lib/drop-cluster/private/node.key',
+  '/var/lib/drop-cluster/private/content-journal.db');
 assert.deepEqual(permissions.trim().split('\n'),Array(4).fill('600 65534 65534'));
+const privateMode=compose('exec','-T','app','stat','-c','%a %u %g','/var/lib/drop-cluster/private');
+assert.equal(privateMode.trim(),'700 65534 65534');
+compose('exec','-T','app','chmod','777','/var/lib/drop-cluster/private','/var/lib/drop-cluster/private/node.key');
+let repaired=false;
+for(let i=0;i<20;i++){
+  await new Promise(resolve=>setTimeout(resolve,500));
+  const modes=compose('exec','-T','app','stat','-c','%a','/var/lib/drop-cluster/private','/var/lib/drop-cluster/private/node.key');
+  if(modes.trim()==='700\n600'){repaired=true;break}
+}
+assert.ok(repaired,'runtime guard did not restore private state permissions');
 compose('exec','-T','app','wget','-q','-O','/dev/null','http://127.0.0.1:8080/');
 compose('restart','--no-deps','app');
 await healthy();

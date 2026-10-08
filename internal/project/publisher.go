@@ -11,6 +11,8 @@ import (
 type Publisher struct {
 	Repository Repository
 	DataRoot   string
+	Installer  ContentInstaller
+	Published  func(Project)
 }
 
 // privateActivator is implemented by repositories that can make a new project
@@ -30,9 +32,14 @@ func (p *Publisher) Publish(ctx context.Context, actor Actor, request Reservatio
 		return Project{}, err
 	}
 	if prepared.Operation.State == "complete" {
+		p.notify(prepared.Project)
 		return prepared.Project, nil
 	}
-	return p.Repository.Activate(ctx, actor, prepared.Operation.ID)
+	result, err := p.Repository.Activate(ctx, actor, prepared.Operation.ID)
+	if err == nil {
+		p.notify(result)
+	}
+	return result, err
 }
 
 // PublishPrivate publishes a new project that is password-protected from its
@@ -56,6 +63,7 @@ func (p *Publisher) PublishPrivate(ctx context.Context, actor Actor, request Res
 		if !prepared.Project.Private {
 			return Project{}, ErrConflict
 		}
+		p.notify(prepared.Project)
 		return prepared.Project, nil
 	}
 	revision := prepared.Project.PolicyRevision + 1
@@ -63,7 +71,17 @@ func (p *Publisher) PublishPrivate(ctx context.Context, actor Actor, request Res
 	if err != nil {
 		return Project{}, errors.Join(ErrStorage, err)
 	}
-	return activator.ActivatePrivate(ctx, actor, prepared.Operation.ID, digest, revision)
+	result, err := activator.ActivatePrivate(ctx, actor, prepared.Operation.ID, digest, revision)
+	if err == nil {
+		p.notify(result)
+	}
+	return result, err
+}
+
+func (p *Publisher) notify(result Project) {
+	if p.Published != nil {
+		p.Published(result)
+	}
 }
 
 // install verifies and reserves the staged version, then installs it unless the
@@ -73,6 +91,7 @@ func (p *Publisher) install(ctx context.Context, actor Actor, request Reservatio
 	if err != nil {
 		return Prepared{}, err
 	}
+	request.Files = len(manifest.Files)
 	request.Digest = staged.Digest
 	request.Bytes = 0
 	for _, file := range manifest.Files {
@@ -92,7 +111,13 @@ func (p *Publisher) install(ctx context.Context, actor Actor, request Reservatio
 	if marker == "" {
 		marker = prepared.Project.Slug
 	}
-	if err := staged.Install(p.DataRoot, prepared.Project.ID, marker); err != nil {
+	var installErr error
+	if p.Installer != nil {
+		installErr = p.Installer.Install(ctx, prepared, staged)
+	} else {
+		installErr = staged.Install(p.DataRoot, prepared.Project.ID, marker)
+	}
+	if err := installErr; err != nil {
 		return Prepared{}, errors.Join(ErrStorage, err)
 	}
 	return prepared, nil

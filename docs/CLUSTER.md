@@ -2,7 +2,7 @@
 
 For current automatic deployments use [FLUX_DEPLOYMENT.md](FLUX_DEPLOYMENT.md).
 It supersedes the manual CA/manifest requirements below. All node-local files,
-including `cluster-node.json`, now reside under `/var/lib/drop-cluster`.
+including `cluster-node.json`, now reside under `/var/lib/drop-cluster/private`.
 
 The coordinator is implemented as `cmd/drop-cluster` with the reusable Go package
 `internal/cluster`. It runs discovery, authenticated status and Raft consensus.
@@ -177,8 +177,10 @@ docker build -t flux-drop:test .
 One image includes the app, Nginx and coordinator, supervised together as
 UID/GID 65534. Ports are 8080 (public), 8445 (Raft) and 8446 (mTLS status).
 The operator configures `/data` as replicated and `/var/lib/drop-cluster` as
-unsynchronized at Flux deployment time. Both directories need owner 65534 and
-mode 0700. Keep node certificates/keys and the manifest outside replicated storage.
+unsynchronized at Flux deployment time. The automatic runtime creates an
+owner-only `/var/lib/drop-cluster/private` child for certificates, keys and the
+manifest; Flux owns the bind root and may widen its permissions. See
+[FLUX_DEPLOYMENT.md](FLUX_DEPLOYMENT.md) for the live Flux permission caveat.
 The separate coordinator Docker target is removed; no second component is needed.
 
 The Docker health check checks the app and, when provisioned, authenticates the

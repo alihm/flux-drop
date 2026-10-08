@@ -38,6 +38,9 @@ func TestRaftProjectLifecycle(t *testing.T) {
 	if p.Owner.ID != a.AnonymousID || p.ChargedBytes == 0 {
 		t.Fatal("private durable fields lost", p)
 	}
+	if p.ExpiresAt == nil || !p.ExpiresAt.Equal(p.CreatedAt.Add(7*24*time.Hour)) {
+		t.Fatal("anonymous project does not expire after one week", p.ExpiresAt)
+	}
 	list, _, err := repo.ListOwned(ctx, a, "", 100)
 	if err != nil || len(list) != 1 {
 		t.Fatal(list, err)

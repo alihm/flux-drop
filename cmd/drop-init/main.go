@@ -86,6 +86,20 @@ func healthcheck() error {
 }
 
 func run(ctx context.Context) error {
+	if role := os.Getenv("DROP_ROLE"); role != "" && role != "primary" && role != "secondary" {
+		return errors.New("DROP_ROLE must be primary or secondary")
+	}
+	if os.Getenv("DROP_ROLE") == "secondary" {
+		if os.Getenv(cluster.PassphraseEnv) != "" {
+			return errors.New("secondary does not use DROP_CLUSTER_PASSPHRASE")
+		}
+		if err := cluster.PrepareStorageVolumes(); err != nil {
+			return err
+		}
+		if configured, err := coordinatorConfigured(clusterManifest); err != nil || configured {
+			return errors.New("secondary cannot reuse primary state")
+		}
+	}
 	if os.Getenv(cluster.PassphraseEnv) != "" {
 		if err := cluster.ProvisionAutomatic(ctx, os.Getenv); err != nil {
 			return err
@@ -98,10 +112,17 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var automaticStateDir string
+	if os.Getenv("DROP_ROLE") == "secondary" {
+		automaticStateDir = cluster.StateDirectory
+	}
 	if configured {
 		c, err := cluster.LoadRuntimeConfig(clusterManifest)
 		if err != nil {
 			return err
+		}
+		if c.Automatic {
+			automaticStateDir = c.StateDir
 		}
 		if err := cluster.EnsureCertificate(c); err != nil {
 			return err
@@ -136,12 +157,37 @@ func run(ctx context.Context) error {
 		started++
 		go func(name string, c *exec.Cmd) { err := c.Wait(); exits <- fmt.Errorf("%s exited: %v", name, err) }(child.Path, child)
 	}
+	guardCtx, stopGuard := context.WithCancel(ctx)
+	defer stopGuard()
+	securityErrors := make(chan error, 1)
+	if automaticStateDir != "" {
+		go func() {
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-guardCtx.Done():
+					return
+				case <-ticker.C:
+					repaired, err := cluster.MaintainAutomaticState(automaticStateDir)
+					if err != nil {
+						securityErrors <- fmt.Errorf("node-local state permission guard: %w", err)
+						return
+					}
+					if repaired {
+						fmt.Fprintln(os.Stderr, "restored private node-local state permissions after host-side change")
+					}
+				}
+			}
+		}()
+	}
 	var result error
 	remaining := started
 	select {
 	case <-ctx.Done():
 	case result = <-exits:
 		remaining--
+	case result = <-securityErrors:
 	}
 	shutdown()
 	timer := time.NewTimer(15 * time.Second)

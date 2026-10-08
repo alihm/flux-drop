@@ -28,6 +28,46 @@ func TestDurableEncodingIncludesHiddenFields(t *testing.T) {
 	}
 }
 
+func TestPrefetchedAuthorizationStillChecksConcurrentRevocation(t *testing.T) {
+	store := &Store{Backend: &testmetadata.Backend{}}
+	ctx := context.Background()
+	if err := store.Run(ctx, func(tx *Tx) error { return tx.Set("tests/authorization", "allowed") }); err != nil {
+		t.Fatal(err)
+	}
+	attempts := 0
+	denied := errors.New("revoked")
+	err := store.Run(ctx, func(tx *Tx) error {
+		attempts++
+		if err := tx.Prefetch([]string{"tests/authorization", "tests/missing", "tests/authorization"}); err != nil {
+			return err
+		}
+		var value string
+		if err := tx.Get("tests/authorization", &value); err != nil {
+			return err
+		}
+		if value == "revoked" {
+			return denied
+		}
+		if err := store.Run(ctx, func(other *Tx) error { return other.Set("tests/authorization", "revoked") }); err != nil {
+			return err
+		}
+		// A repeated prefetch must not replace an already checked authorization.
+		if err := tx.Prefetch([]string{"tests/authorization"}); err != nil {
+			return err
+		}
+		if err := tx.Get("tests/authorization", &value); err != nil || value != "allowed" {
+			t.Fatal("prefetch replaced snapshot", value, err)
+		}
+		if err := tx.Get("tests/missing", nil); !errors.Is(err, ErrNotFound) {
+			t.Fatal("missing record", err)
+		}
+		return nil
+	})
+	if !errors.Is(err, denied) || attempts != 2 {
+		t.Fatal("prefetch bypassed CAS", attempts, err)
+	}
+}
+
 type failAfterCommit struct {
 	*testmetadata.Backend
 	calls int
