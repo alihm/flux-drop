@@ -64,27 +64,28 @@ func (a Actor) Owns(o Owner) bool {
 }
 
 type Project struct {
-	ID               string     `firestore:"id" json:"id"`
-	StorageApp       string     `firestore:"storageApp" json:"-"`
-	Owner            Owner      `firestore:"owner" json:"owner"`
-	OwnerKey         string     `firestore:"ownerKey" json:"-"`
-	Slug             string     `firestore:"slug" json:"slug"`
-	InitialSlug      string     `firestore:"initialSlug" json:"-"`
-	AliasCount       int        `firestore:"aliasCount" json:"-"`
-	InitialSuffix    string     `firestore:"initialSuffix" json:"initialSuffix"`
-	ActiveDigest     string     `firestore:"activeDigest" json:"digest"`
-	ActiveBytes      int64      `firestore:"activeBytes" json:"bytes"`
-	ChargedBytes     int64      `firestore:"chargedBytes" json:"-"`
-	Revision         int64      `firestore:"revision" json:"revision"`
-	PolicyRevision   int64      `firestore:"policyRevision" json:"-"`
-	Private          bool       `firestore:"private" json:"private"`
-	PasswordDigest   string     `firestore:"passwordDigest" json:"-"`
-	PasswordRevision int64      `firestore:"passwordRevision" json:"-"`
-	Status           string     `firestore:"status" json:"status"`
-	PendingOperation string     `firestore:"pendingOperation" json:"-"`
-	CreatedAt        time.Time  `firestore:"createdAt" json:"createdAt"`
-	UpdatedAt        time.Time  `firestore:"updatedAt" json:"updatedAt"`
-	ExpiresAt        *time.Time `firestore:"expiresAt" json:"expiresAt"`
+	ID                string     `firestore:"id" json:"id"`
+	StorageApp        string     `firestore:"storageApp" json:"-"`
+	Owner             Owner      `firestore:"owner" json:"owner"`
+	OwnerKey          string     `firestore:"ownerKey" json:"-"`
+	Slug              string     `firestore:"slug" json:"slug"`
+	InitialSlug       string     `firestore:"initialSlug" json:"-"`
+	AliasCount        int        `firestore:"aliasCount" json:"-"`
+	InitialSuffix     string     `firestore:"initialSuffix" json:"initialSuffix"`
+	ActiveDigest      string     `firestore:"activeDigest" json:"digest"`
+	ActiveBytes       int64      `firestore:"activeBytes" json:"bytes"`
+	ChargedBytes      int64      `firestore:"chargedBytes" json:"-"`
+	Revision          int64      `firestore:"revision" json:"revision"`
+	PolicyRevision    int64      `firestore:"policyRevision" json:"-"`
+	WatermarkDisabled bool       `firestore:"watermarkDisabled" json:"watermarkDisabled"`
+	Private           bool       `firestore:"private" json:"private"`
+	PasswordDigest    string     `firestore:"passwordDigest" json:"-"`
+	PasswordRevision  int64      `firestore:"passwordRevision" json:"-"`
+	Status            string     `firestore:"status" json:"status"`
+	PendingOperation  string     `firestore:"pendingOperation" json:"-"`
+	CreatedAt         time.Time  `firestore:"createdAt" json:"createdAt"`
+	UpdatedAt         time.Time  `firestore:"updatedAt" json:"updatedAt"`
+	ExpiresAt         *time.Time `firestore:"expiresAt" json:"expiresAt"`
 }
 
 func (p Project) Live(now time.Time) bool {
@@ -123,12 +124,13 @@ type Repository interface {
 	Tombstone(context.Context, Actor, string, int64) error
 	Rename(context.Context, Actor, string, string, int64) (Project, error)
 	SetPrivacy(context.Context, Actor, string, int64, string, int64) (Project, error)
+	SetWatermark(context.Context, Actor, string, int64, bool) (Project, error)
 }
 
 var digestRE = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var idRE = regexp.MustCompile(`^[a-f0-9]{32}$`)
 var nameRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$`)
-var slugRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?-[a-f0-9]{6}$`)
+var slugRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,111}[a-z0-9])?$`)
 var keyRE = regexp.MustCompile(`^[A-Za-z0-9_-]{8,128}$`)
 
 func hash(value any) string {

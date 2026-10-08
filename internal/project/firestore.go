@@ -118,7 +118,6 @@ func (s *FirestoreRepository) Reserve(ctx context.Context, a Actor, r Reservatio
 		now := s.now()
 		isNew := r.ProjectID == ""
 		var p Project
-		slugExists := false
 		if isNew {
 			name := r.Name
 			if name == "" {
@@ -126,7 +125,7 @@ func (s *FirestoreRepository) Reserve(ctx context.Context, a Actor, r Reservatio
 				nouns := []string{"pine", "river", "cloud", "meadow"}
 				name = adjectives[int(opID[0])%4] + "-" + nouns[int(opID[1])%4] + "-" + opID[2:6]
 			}
-			p = Project{ID: opID[:32], Owner: a.Owner(), OwnerKey: ownerKey(a.Owner()), Slug: name + "-" + r.Digest[:6], InitialSuffix: r.Digest[:6], CreatedAt: now, PolicyRevision: 1, Status: "reserved"}
+			p = Project{ID: opID[:32], Owner: a.Owner(), OwnerKey: ownerKey(a.Owner()), CreatedAt: now, PolicyRevision: 1, Status: "reserved"}
 			if p.Owner.Kind == "anonymous" {
 				expiry := now.Add(anonymousProjectLifetime)
 				p.ExpiresAt = &expiry
@@ -137,11 +136,15 @@ func (s *FirestoreRepository) Reserve(ctx context.Context, a Actor, r Reservatio
 				}
 				return ErrConflict
 			}
-			if _, err := tx.Get(s.ref("slugs", p.Slug)); !missing(err) {
-				if err != nil {
-					return err
+			p.Slug, p.InitialSuffix, err = chooseSlug(name, r.Digest, p.ID, func(slug string) (string, error) {
+				record, e := read[slugRecord](tx, s.ref("slugs", slug))
+				if missing(e) {
+					return "", nil
 				}
-				slugExists = true
+				return record.ProjectID, e
+			})
+			if err != nil {
+				return err
 			}
 		} else {
 			p, err = read[Project](tx, s.ref("projects", r.ProjectID))
@@ -178,9 +181,6 @@ func (s *FirestoreRepository) Reserve(ctx context.Context, a Actor, r Reservatio
 			}
 		} else if err != nil && !missing(err) {
 			return err
-		}
-		if slugExists {
-			return ErrConflict
 		}
 		q, err := s.readQuota(tx, p.Owner)
 		if err != nil && !missing(err) {

@@ -115,7 +115,6 @@ func (s *RaftRepository) Reserve(ctx context.Context, a Actor, r Reservation) (P
 		now := s.now()
 		isNew := r.ProjectID == ""
 		var p Project
-		slugExists := false
 		if isNew {
 			name := r.Name
 			if name == "" {
@@ -123,7 +122,7 @@ func (s *RaftRepository) Reserve(ctx context.Context, a Actor, r Reservation) (P
 				nouns := []string{"pine", "river", "cloud", "meadow"}
 				name = adjectives[int(opID[0])%4] + "-" + nouns[int(opID[1])%4] + "-" + opID[2:6]
 			}
-			p = Project{ID: opID[:32], Owner: a.Owner(), OwnerKey: ownerKey(a.Owner()), Slug: name + "-" + r.Digest[:6], InitialSuffix: r.Digest[:6], CreatedAt: now, PolicyRevision: 1, Status: "reserved"}
+			p = Project{ID: opID[:32], Owner: a.Owner(), OwnerKey: ownerKey(a.Owner()), CreatedAt: now, PolicyRevision: 1, Status: "reserved"}
 			if p.Owner.Kind == "anonymous" {
 				expiry := now.Add(anonymousProjectLifetime)
 				p.ExpiresAt = &expiry
@@ -134,11 +133,15 @@ func (s *RaftRepository) Reserve(ctx context.Context, a Actor, r Reservation) (P
 				}
 				return ErrConflict
 			}
-			if _, err := tx.Get(s.raftRef("slugs", p.Slug)); !raftMissing(err) {
-				if err != nil {
-					return err
+			p.Slug, p.InitialSuffix, err = chooseSlug(name, r.Digest, p.ID, func(slug string) (string, error) {
+				record, e := raftRead[slugRecord](tx, s.raftRef("slugs", slug))
+				if raftMissing(e) {
+					return "", nil
 				}
-				slugExists = true
+				return record.ProjectID, e
+			})
+			if err != nil {
+				return err
 			}
 		} else {
 			p, err = raftRead[Project](tx, s.raftRef("projects", r.ProjectID))
@@ -175,9 +178,6 @@ func (s *RaftRepository) Reserve(ctx context.Context, a Actor, r Reservation) (P
 			}
 		} else if err != nil && !raftMissing(err) {
 			return err
-		}
-		if slugExists {
-			return ErrConflict
 		}
 		q, err := s.readQuota(tx, p.Owner)
 		if err != nil && !raftMissing(err) {
@@ -578,9 +578,19 @@ func (s *RaftRepository) Rename(ctx context.Context, a Actor, id, name string, r
 		if p.Revision != revision || p.PendingOperation != "" {
 			return ErrConflict
 		}
-		slug := name + "-" + p.InitialSuffix
-		if !slugRE.MatchString(slug) {
-			return ErrInvalid
+		seed := p.ActiveDigest
+		if p.InitialSuffix != "" {
+			seed = p.InitialSuffix + hash(p.ID)
+		}
+		slug, suffix, err := chooseSlug(name, seed, id, func(slug string) (string, error) {
+			record, e := raftRead[slugRecord](tx, s.raftRef("slugs", slug))
+			if raftMissing(e) {
+				return "", nil
+			}
+			return record.ProjectID, e
+		})
+		if err != nil {
+			return err
 		}
 		if slug == p.Slug {
 			result = p
@@ -602,6 +612,7 @@ func (s *RaftRepository) Rename(ctx context.Context, a Actor, id, name string, r
 			p.InitialSlug = p.Slug
 		}
 		p.Slug = slug
+		p.InitialSuffix = suffix
 		p.Revision++
 		p.PolicyRevision++
 		if newAlias {

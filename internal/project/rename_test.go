@@ -21,7 +21,7 @@ func TestFirestoreRenameAndUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if renamed.Slug != "new-name-"+original.InitialSuffix || renamed.ActiveDigest != original.ActiveDigest || !renamed.ExpiresAt.Equal(*original.ExpiresAt) || renamed.InitialSlug != original.Slug {
+	if renamed.Slug != "new-name" || renamed.ActiveDigest != original.ActiveDigest || !renamed.ExpiresAt.Equal(*original.ExpiresAt) || renamed.InitialSlug != original.Slug {
 		t.Fatal("rename changed content or lifecycle", renamed)
 	}
 	if alias, err := r.Resolve(ctx, original.Slug); err != nil || alias.Slug != renamed.Slug {

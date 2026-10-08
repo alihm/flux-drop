@@ -29,9 +29,19 @@ func (s *FirestoreRepository) Rename(ctx context.Context, a Actor, id, name stri
 		if p.Revision != revision || p.PendingOperation != "" {
 			return ErrConflict
 		}
-		slug := name + "-" + p.InitialSuffix
-		if !slugRE.MatchString(slug) {
-			return ErrInvalid
+		seed := p.ActiveDigest
+		if p.InitialSuffix != "" {
+			seed = p.InitialSuffix + hash(p.ID)
+		}
+		slug, suffix, err := chooseSlug(name, seed, id, func(slug string) (string, error) {
+			record, e := read[slugRecord](tx, s.ref("slugs", slug))
+			if missing(e) {
+				return "", nil
+			}
+			return record.ProjectID, e
+		})
+		if err != nil {
+			return err
 		}
 		if slug == p.Slug {
 			result = p
@@ -53,6 +63,7 @@ func (s *FirestoreRepository) Rename(ctx context.Context, a Actor, id, name stri
 			p.InitialSlug = p.Slug
 		}
 		p.Slug = slug
+		p.InitialSuffix = suffix
 		p.Revision++
 		p.PolicyRevision++
 		if newAlias {

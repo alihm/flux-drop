@@ -31,7 +31,7 @@ func TestProjectDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := project.Project{ID: strings.Repeat("a", 32), Slug: "hello-" + staged.Digest[:6], ActiveDigest: staged.Digest, Status: "active"}
+	p := project.Project{ID: strings.Repeat("a", 32), Slug: "hello", ActiveDigest: staged.Digest, Status: "active"}
 	if err := staged.Install(root, p.ID, p.Slug); err != nil {
 		t.Fatal(err)
 	}
@@ -47,13 +47,24 @@ func TestProjectDelivery(t *testing.T) {
 	}
 	for _, method := range []string{"GET", "HEAD"} {
 		w := request(method, "/"+p.Slug+"/")
-		if w.Code != 200 || !strings.HasSuffix(w.Header().Get("X-Accel-Redirect"), "/public/index.html") || w.Header().Get("Access-Control-Allow-Origin") != "*" {
+		if w.Code != 200 || w.Header().Get("X-Accel-Redirect") != "" || w.Header().Get("Access-Control-Allow-Origin") != "*" {
 			t.Fatalf("delivery: %d %v", w.Code, w.Header())
+		}
+		if method == "GET" && w.Body.String() != "<h1>hello</h1>"+projectWatermark {
+			t.Fatal("missing watermark", w.Body.String())
+		}
+		if method == "HEAD" && w.Body.Len() != 0 {
+			t.Fatal("HEAD returned a body")
 		}
 		if strings.Contains(w.Header().Get("Content-Security-Policy"), "allow-same-origin") {
 			t.Fatal("unsafe sandbox")
 		}
 	}
+	repo.p.WatermarkDisabled = true
+	if w := request("GET", "/"+p.Slug+"/"); w.Code != 200 || !strings.HasSuffix(w.Header().Get("X-Accel-Redirect"), "/public/index.html") {
+		t.Fatal("watermark opt-out did not use original content", w.Code, w.Header())
+	}
+	repo.p = p
 	for _, path := range []string{"/" + p.Slug + "/../manifest.json", "/" + p.Slug + "/%69ndex.html", "/" + p.Slug + "/manifest.json", "/_drop_internal/files/anything"} {
 		if w := request("GET", path); w.Code != 404 || w.Header().Get("X-Accel-Redirect") != "" {
 			t.Fatalf("unsafe path %s: %d", path, w.Code)

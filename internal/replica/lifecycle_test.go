@@ -121,7 +121,7 @@ func TestMultiInstanceRuntimeLifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if res.StatusCode != want || (wantBody != "" && string(data) != wantBody) {
+		if res.StatusCode != want || (wantBody != "" && (!strings.HasPrefix(string(data), wantBody) || !strings.Contains(string(data), `data-drop-watermark="runonflux"`))) {
 			t.Fatalf("status=%d body=%q", res.StatusCode, data)
 		}
 	}

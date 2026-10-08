@@ -65,7 +65,7 @@
           <ul id="selected-files" class="selected-files" hidden></ul>
           <div class="name-row">
             <div><label for="name">Site name</label><p class="field-hint">We suggested one from your files. Change it if you like.</p></div>
-            <div class="name-input-wrap"><input id="name" maxlength="48" autocomplete="off" spellcheck="false" autocapitalize="off" aria-describedby="name-help url-preview"><p id="url-preview" class="url-preview"></p><p id="name-help" class="field-hint">Lowercase letters, numbers, and hyphens. A short unique suffix is added.</p></div>
+            <div class="name-input-wrap"><input id="name" maxlength="48" autocomplete="off" spellcheck="false" autocapitalize="off" aria-describedby="name-help url-preview"><p id="url-preview" class="url-preview"></p><p id="name-help" class="field-hint">Lowercase letters, numbers, and hyphens. A short suffix is added only if the name is taken.</p></div>
           </div>
           <div class="private-row">
             <label class="switch"><input id="private-toggle" type="checkbox" role="switch" aria-describedby="private-help"><span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span><span class="switch-text"><span class="switch-title">Make it private</span><span id="private-help" class="field-hint">Visitors need a password to open it. It is never public, not even briefly.</span></span></label>
@@ -142,7 +142,7 @@
     style.css
     app.js</pre></div></details>
           <details><summary>What happens after 7 days?</summary><div><p>Sites published without an account expire 7 days after publishing, and their links stop working. Sign in to claim a site and keep it with no expiry. Claimed sites appear in your workspace on any device where you sign in.</p></div></details>
-          <details><summary>Can I update a site without changing its link?</summary><div><p>Yes. Open <strong>Manage</strong> on the site card and replace the content with a new HTML file, ZIP, or folder. The URL stays the same. Renaming a site keeps its six-character suffix.</p></div></details>
+          <details><summary>Can I update a site without changing its link?</summary><div><p>Yes. Open <strong>Manage</strong> on the site card and replace the content with a new HTML file, ZIP, or folder. The URL stays the same. Available names use a clean URL; a taken name gets a short suffix. Old links redirect after a rename.</p></div></details>
           <details><summary>Do React, Vue, or other single-page apps work?</summary><div><p>Prebuilt bundles work. Upload the build output (for example <code>dist/</code> or <code>build/</code>), not the source. Configure your build to use relative asset paths. Because each site is sandboxed, apps that rely on cookies, <code>localStorage</code>, or service workers may behave differently.</p></div></details>
           <details><summary>How private are password-protected sites?</summary><div><p>Turn on <strong>Private</strong> when you publish, or later from <strong>Manage</strong>. Private sites are only served after a visitor enters the correct password. Access is temporary and stays in that browser. Private hosting currently supports self-contained HTML pages, with styles and scripts inlined.</p></div></details>
           <details><summary>What are the limits?</summary><div><p>Each upload can be up to <span class="limit-bytes">50 MiB</span> and <span class="limit-files">5,000</span> files, and only static files are served. There is no server-side code, database, or form handling.</p></div></details>

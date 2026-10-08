@@ -249,7 +249,7 @@ func TestFirestoreProjectHTTP(t *testing.T) {
 		h.ServeHTTP(w, r)
 		return w
 	}
-	if w := privateRequest(cookie, "navigate", ""); w.Code != 200 || !strings.HasPrefix(w.Header().Get("X-Accel-Redirect"), "/_drop_internal/private/") || w.Header().Get("Access-Control-Allow-Origin") != "" {
+	if w := privateRequest(cookie, "navigate", ""); w.Code != 200 || w.Body.String() != "second"+projectWatermark || w.Header().Get("Access-Control-Allow-Origin") != "" {
 		t.Fatal("private delivery failed", w.Code, w.Header())
 	}
 	if w := privateRequest(outsider, "navigate", ""); w.Code != 303 || w.Header().Get("Location") != "/unlock/"+created.Slug {

@@ -22,7 +22,7 @@ test('publishing uses CSRF and a stable retry key and renders a safe success lin
     if(!firstKey)firstKey=key;else expect(key).toBe(firstKey);
     expect(route.request().postData()).toContain('index.html');
     attempts++;
-    await route.fulfill(attempts===1?{status:503,json:{error:'unavailable'}}:{json:{path:'/my-site-abcdef/',project:{expiresAt:'2026-10-22T00:00:00Z'}}});
+    await route.fulfill(attempts===1?{status:503,json:{error:'unavailable'}}:{json:{path:'/my-site/',project:{expiresAt:'2026-10-22T00:00:00Z'}}});
   });
   await page.goto('/');await expect(page.locator('#status')).toContainText('Choose a site');
   await page.locator('#files').setInputFiles({name:'index.html',mimeType:'text/html',buffer:Buffer.from('<h1>Hello</h1>')});
@@ -30,7 +30,7 @@ test('publishing uses CSRF and a stable retry key and renders a safe success lin
   await page.getByRole('button',{name:'Publish site'}).click();
   await expect(page.locator('#status')).toContainText('could not be confirmed');
   await page.getByRole('button',{name:'Publish site'}).click();
-  await expect(page.locator('#project-link')).toHaveAttribute('href','/my-site-abcdef/');
+  await expect(page.locator('#project-link')).toHaveAttribute('href','/my-site/');
   await expect(page.locator('#status')).toContainText('Published successfully');
   await expect(page.locator('#publish')).toBeDisabled();
   await expect(page.locator('#selection-stage')).toBeHidden();

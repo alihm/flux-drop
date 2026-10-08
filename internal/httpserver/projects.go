@@ -259,6 +259,45 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 		}
 		respondProject(w, p)
 	}))
+	mux.Handle("PUT /api/projects/{id}/watermark", mutate(func(w http.ResponseWriter, r *http.Request) {
+		r, cancel := bounded(r)
+		defer cancel()
+		a, err := actor(r, true)
+		if err != nil {
+			projectError(w, err)
+			return
+		}
+		revision, err := expectedRevision(r)
+		if err != nil {
+			revisionError(w, err)
+			return
+		}
+		kind, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err != nil || kind != "application/json" {
+			projectError(w, project.ErrInvalid)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 8192)
+		var input struct {
+			Enabled *bool `json:"enabled"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&input); err != nil {
+			projectError(w, errors.Join(project.ErrInvalid, err))
+			return
+		}
+		if input.Enabled == nil || decoder.Decode(new(any)) != io.EOF {
+			projectError(w, project.ErrInvalid)
+			return
+		}
+		p, err := deps.Projects.Repository.SetWatermark(r.Context(), a, r.PathValue("id"), revision, *input.Enabled)
+		if err != nil {
+			projectError(w, err)
+			return
+		}
+		respondProject(w, p)
+	}))
 	mux.Handle("PATCH /api/projects/{id}", mutate(func(w http.ResponseWriter, r *http.Request) {
 		r, cancel := bounded(r)
 		defer cancel()

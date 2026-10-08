@@ -301,7 +301,7 @@ func TestCacheRespectsCurrentPolicyDeletionAndCorruption(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 		return rec
 	}
-	if rec := call(false); rec.Code != 200 || rec.Body.String() != "<h1>cached</h1>" {
+	if rec := call(false); rec.Code != 200 || (!strings.HasPrefix(rec.Body.String(), "<h1>cached</h1>") || !strings.Contains(rec.Body.String(), `data-drop-watermark="runonflux"`)) {
 		t.Fatal(rec.Code, rec.Body.String())
 	}
 	if p.cache.used == 0 {

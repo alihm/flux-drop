@@ -39,11 +39,12 @@ type State struct {
 }
 type Recent struct{ IDs []string }
 type Card struct {
-	ID        string    `json:"id"`
-	Slug      string    `json:"slug"`
-	UpdatedAt time.Time `json:"updatedAt"`
-	Thumbnail string    `json:"thumbnail"`
-	Claimed   bool      `json:"claimed"`
+	ID            string    `json:"id"`
+	Slug          string    `json:"slug"`
+	InitialSuffix string    `json:"initialSuffix"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+	Thumbnail     string    `json:"thumbnail"`
+	Claimed       bool      `json:"claimed"`
 }
 type Service struct {
 	Store   *metadata.Store
@@ -180,7 +181,7 @@ func (s *Service) Explore(ctx context.Context) ([]Card, error) {
 				return err
 			}
 			if discoverable(p) && digestPattern.MatchString(p.ActiveDigest) {
-				rows = append(rows, Card{ID: p.ID, Slug: p.Slug, UpdatedAt: updated(p), Thumbnail: "/api/projects/" + p.ID + "/thumbnail?v=" + p.ActiveDigest, Claimed: true})
+				rows = append(rows, Card{ID: p.ID, Slug: p.Slug, InitialSuffix: p.InitialSuffix, UpdatedAt: updated(p), Thumbnail: "/api/projects/" + p.ID + "/thumbnail?v=" + p.ActiveDigest, Claimed: true})
 			}
 		}
 		sort.Slice(rows, func(i, j int) bool {

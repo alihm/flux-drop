@@ -30,7 +30,7 @@ import (
 
 const apiPrefix = "/internal/storage/v1/"
 
-var projectSlugRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,47}-[a-f0-9]{6}$`)
+var projectSlugRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,111}[a-z0-9])?$`)
 var opBucket = []byte("storage-operations-v1")
 var errFull = errors.New("storage capacity unavailable")
 var errConflict = errors.New("storage operation conflict")

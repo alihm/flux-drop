@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -18,7 +19,7 @@ type projectResolver interface {
 	Resolve(context.Context, string) (project.Project, error)
 }
 
-var deliverySlug = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?-[a-f0-9]{6}$`)
+var deliverySlug = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,111}[a-z0-9])?$`)
 var deliveryID = regexp.MustCompile(`^[a-f0-9]{32}$`)
 var deliveryDigest = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
@@ -101,6 +102,13 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 		if file == "" || strings.HasSuffix(file, "/") {
 			file += "index.html"
 		}
+		branded := !p.WatermarkDisabled && htmlFile(file)
+		if branded {
+			r = watermarkRequest(r)
+			writer := &watermarkWriter{ResponseWriter: w, head: r.Method == http.MethodHead}
+			w = writer
+			defer writer.finish()
+		}
 		if p.StorageApp != "" {
 			if fallback != nil && (!p.Private || remotePrivateFallback(fallback)) {
 				if remote, ok := fallback.(AuthorizedProjectFallback); ok {
@@ -112,7 +120,7 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 						if !current.Live(time.Now()) || current.PolicyRevision != p.PolicyRevision || current.Private != p.Private {
 							return project.ErrNotFound
 						}
-						if current.Slug != p.Slug || current.ActiveDigest != p.ActiveDigest || current.StorageApp != p.StorageApp {
+						if current.Slug != p.Slug || current.ActiveDigest != p.ActiveDigest || current.StorageApp != p.StorageApp || current.WatermarkDisabled != p.WatermarkDisabled {
 							return project.ErrStorage
 						}
 						if current.Private && (privateAccess == nil || !privateAccess(r.WithContext(ctx), current)) {
@@ -149,6 +157,22 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 				prefix = "/_drop_internal/files/"
 				w.Header().Set("Access-Control-Allow-Origin", "*")
 				w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
+			}
+			if branded {
+				root, err := os.OpenRoot(filepath.Join(dataRoot, "projects", p.ID, "versions", p.ActiveDigest, "public"))
+				if err != nil {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				defer root.Close()
+				f, err := root.Open(file)
+				if err != nil {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				defer f.Close()
+				http.ServeContent(w, r, file, time.Time{}, f)
+				return
 			}
 			internal := prefix + p.ID + "/versions/" + p.ActiveDigest + "/public/" + file
 			w.Header().Set("X-Accel-Redirect", (&url.URL{Path: internal}).EscapedPath())

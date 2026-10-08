@@ -2,7 +2,8 @@
 (() => {
   const $ = id => document.getElementById(id);
   const namePattern = /^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/;
-  const pathPattern = /^\/[a-z0-9][a-z0-9-]*-[a-f0-9]{6}\/$/;
+  const pathPattern = /^\/[a-z0-9](?:[a-z0-9-]{0,111}[a-z0-9])?\/$/;
+  const projectName = project => project.initialSuffix && project.slug.endsWith("-" + project.initialSuffix) ? project.slug.slice(0, -project.initialSuffix.length - 1) : project.slug;
   const names = ['quiet-orbit', 'bright-signal', 'tiny-comet', 'fresh-horizon', 'silver-cloud', 'open-canvas'];
   const randomName = () => {
     const value = new Uint32Array(1);
@@ -252,7 +253,7 @@
   function renderUrlPreview() {
     const name = document.createElement('b');
     name.textContent = $('name').value || 'your-name';
-    $('url-preview').replaceChildren(`${window.location.host}/`, name, '-xxxxxx/');
+    $('url-preview').replaceChildren(`${window.location.host}/`, name, '/');
   }
 
   function setAuthState() {
@@ -319,7 +320,7 @@
     const nameValid = namePattern.test($('name').value);
     $('name').setAttribute('aria-invalid', String(!nameValid));
     $('name-help').textContent = nameValid
-      ? 'Lowercase letters, numbers, and hyphens. A short unique suffix is added.'
+      ? 'Lowercase letters, numbers, and hyphens. A short suffix is added only if the name is taken.'
       : 'Use 1–48 lowercase letters, numbers, or internal hyphens.';
     renderUrlPreview();
     $('selection-stage').hidden = !files.length || published;
@@ -995,7 +996,7 @@
         const card = document.createElement('a'); card.className = 'explore-card'; card.href = path; card.target = '_blank'; card.rel = 'noopener noreferrer';
         card.setAttribute('aria-label', 'Open ' + project.slug + ' in a new tab'); card.append(thumbnail(project));
         const info = document.createElement('div'); info.className = 'explore-card-info';
-        const title = document.createElement('h3'); title.textContent = project.slug.slice(0, -7).replace(/-/g, ' ');
+        const title = document.createElement('h3'); title.textContent = projectName(project).replace(/-/g, ' ');
         const arrow = document.createElement('span'); arrow.className = 'explore-arrow'; arrow.textContent = '↗'; arrow.setAttribute('aria-hidden', 'true');
         const meta = document.createElement('p'); meta.textContent = 'Deployed ' + (ageLabel(project.updatedAt) || 'recently');
         info.append(title, arrow, meta); card.append(info); cards.push(card);
@@ -1145,12 +1146,16 @@
     }
 
     const settingsTitle = document.createElement('h3'); settingsTitle.textContent = 'Site name'; settingsPanel.append(settingsTitle);
-    note(settingsPanel, 'Renaming keeps the six-character suffix. Existing links may continue to redirect.');
-    const rename = field(settingsPanel, 'New site name', 'text', project.slug.slice(0, -7)); rename.maxLength = 48;
+    note(settingsPanel, 'Available names use a clean URL. A taken name gets a short suffix. Existing links redirect to the new address.');
+    const rename = field(settingsPanel, 'New site name', 'text', projectName(project)); rename.maxLength = 48;
     addButton(settingsPanel, 'Rename', 'secondary', () => {
       if (!namePattern.test(rename.value)) { setMessage('Use 1–48 lowercase letters, numbers, or internal hyphens.', true); return; }
       perform('PATCH', '', {name: rename.value});
     });
+    const watermarkTitle = document.createElement('h3'); watermarkTitle.textContent = 'RunOnFlux watermark'; settingsPanel.append(watermarkTitle);
+    note(settingsPanel, 'Show a small “Powered by RunOnFlux” badge at the bottom right of your site.');
+    const watermark = field(settingsPanel, 'Show Powered by RunOnFlux', 'checkbox'); watermark.checked = !project.watermarkDisabled;
+    addButton(settingsPanel, 'Save watermark setting', 'secondary', () => perform('PUT', '/watermark', {enabled: watermark.checked}));
     const dangerZone = document.createElement('div'); dangerZone.className = 'danger-zone'; settingsPanel.append(dangerZone);
     const deleteTitle = document.createElement('h3'); deleteTitle.textContent = 'Delete site'; dangerZone.append(deleteTitle);
     note(dangerZone, `Deleting removes the public URL and site access. This cannot be undone. Type ${project.slug} to confirm.`);

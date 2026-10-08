@@ -4,7 +4,7 @@ const id='a'.repeat(32);
 async function setup(page) {
   await page.route('**/api/config',r=>r.fulfill({json:{publishingEnabled:true,authenticationEnabled:true,limits:{uploadBytes:52428800,files:5000}}}));
   await page.route('**/api/session',r=>r.fulfill({json:{csrfToken:'manage-csrf'}}));
-  const state={project:{id,slug:'site-abcdef',revision:1,private:false,expiresAt:'2026-10-22T00:00:00Z'}};
+  const state={project:{id,slug:'site-abcdef',initialSuffix:'abcdef',revision:1,private:false,expiresAt:'2026-10-22T00:00:00Z'}};
   await page.route('**/api/projects',r=>r.fulfill({json:{projects:state.project?[state.project]:[],nextCursor:''}}));
   return state;
 }
@@ -56,3 +56,22 @@ test('content replacement keeps its idempotency key across an unchanged retry',a
   await page.getByRole('button',{name:'Replace content',exact:true}).click();await expect(page.locator('.management-status')).toContainText('result could not be confirmed');
   await page.getByRole('button',{name:'Replace content',exact:true}).click();await expect(page.locator('#manage-dialog')).toBeHidden();expect(calls).toBe(2);
 });
+
+ test('clean names and watermark preference work in Manage',async({page})=>{
+  const state=await setup(page);state.project.slug='site-abcdef';state.project.initialSuffix='';
+  let calls=0;
+  await page.route(`**/api/projects/${id}/watermark`,async route=>{
+    expect(route.request().method()).toBe('PUT');expect(route.request().postDataJSON()).toEqual({enabled:false});
+    const headers=await route.request().allHeaders();expect(headers['if-match']).toBe('"1"');expect(headers['x-csrf-token']).toBe('manage-csrf');
+    calls++;state.project.watermarkDisabled=true;state.project.revision++;
+    await route.fulfill({json:{project:state.project}});
+  });
+  await open(page);await page.getByRole('button',{name:'Settings',exact:true}).click();
+  await expect(page.getByLabel('New site name')).toHaveValue('site-abcdef');
+  await expect(page.getByLabel('Show Powered by RunOnFlux')).toBeChecked();
+  await page.getByLabel('Show Powered by RunOnFlux').uncheck();
+  await page.getByRole('button',{name:'Save watermark setting',exact:true}).click();
+  await expect(page.locator('#manage-dialog')).toBeHidden();expect(calls).toBe(1);
+  await page.getByRole('button',{name:'Manage',exact:true}).click();await page.getByRole('button',{name:'Settings',exact:true}).click();
+  await expect(page.getByLabel('Show Powered by RunOnFlux')).not.toBeChecked();
+ });

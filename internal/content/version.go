@@ -17,7 +17,7 @@ import (
 
 var versionDigestRE = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var projectIDRE = regexp.MustCompile(`^[a-f0-9]{32}$`)
-var markerRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,47}-[a-f0-9]{6}$`)
+var markerRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,111}[a-z0-9])?$`)
 
 // VerifyVersion validates actual bytes and rejects symlinks, unexpected files,
 // missing files, malformed manifests and noncanonical file ordering. Replicas

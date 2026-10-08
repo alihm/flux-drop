@@ -108,7 +108,7 @@ func PeerBoundary(app string, local http.Handler) http.Handler {
 	})
 }
 
-var peerSlug = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?-[a-f0-9]{6}$`)
+var peerSlug = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,111}[a-z0-9])?$`)
 
 func validatePeerPath(u *url.URL) error {
 	const prefix = "/_drop_peer/content/"

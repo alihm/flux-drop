@@ -89,9 +89,45 @@ func TestBrowserLifecycleUsesRemoteStorageAndCurrentAccess(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "projects", pr.ID)); !os.IsNotExist(err) {
 		t.Fatal("primary retained full project files", err)
 	}
-	if rec := call("GET", "/"+pr.Slug+"/", "", "", "", 0, false); rec.Code != 200 || rec.Body.String() != "<h1>initial</h1>" {
+	if rec := call("GET", "/"+pr.Slug+"/", "", "", "", 0, false); rec.Code != 200 || (!strings.HasPrefix(rec.Body.String(), "<h1>initial</h1>") || !strings.Contains(rec.Body.String(), `data-drop-watermark="runonflux"`)) {
 		t.Fatal(rec.Code, rec.Body.String())
 	}
+	if pr.Slug != "remote" || pr.InitialSuffix != "" {
+		t.Fatal("clean remote URL unavailable", pr.Slug)
+	}
+	for _, body := range []string{`{}`, `{"enabled":"false"}`, `{"enabled":false,"extra":true}`, `{"enabled":false} {}`} {
+		if rec := call("PUT", "/api/projects/"+pr.ID+"/watermark", body, "application/json", "", pr.Revision, false); rec.Code != 400 {
+			t.Fatal("malformed preference accepted", body, rec.Code)
+		}
+	}
+	badCSRF := httptest.NewRequest("PUT", "/api/projects/"+pr.ID+"/watermark", strings.NewReader(`{"enabled":false}`))
+	badCSRF.AddCookie(cookies[0])
+	badCSRF.Header.Set("Origin", "https://drop.example.com")
+	badCSRF.Header.Set("Content-Type", "application/json")
+	badCSRF.Header.Set("If-Match", `"1"`)
+	denied := httptest.NewRecorder()
+	handler.ServeHTTP(denied, badCSRF)
+	if denied.Code < 400 {
+		t.Fatal("preference mutation without CSRF", denied.Code)
+	}
+	disabled := call("PUT", "/api/projects/"+pr.ID+"/watermark", `{"enabled":false}`, "application/json", "", pr.Revision, false)
+	if disabled.Code != 200 {
+		t.Fatal(disabled.Code, disabled.Body.String())
+	}
+	json.Unmarshal(disabled.Body.Bytes(), &response)
+	pr = response.Project
+	if !pr.WatermarkDisabled {
+		t.Fatal("opt-out absent from JSON")
+	}
+	if rec := call("GET", "/"+pr.Slug+"/", "", "", "", 0, false); rec.Code != 200 || rec.Body.String() != "<h1>initial</h1>" {
+		t.Fatal("cache ignored preference", rec.Code, rec.Body.String())
+	}
+	restored := call("PUT", "/api/projects/"+pr.ID+"/watermark", `{"enabled":true}`, "application/json", "", pr.Revision, false)
+	if restored.Code != 200 {
+		t.Fatal(restored.Code, restored.Body.String())
+	}
+	json.Unmarshal(restored.Body.Bytes(), &response)
+	pr = response.Project
 	// HTTP retry returns the same project and does not allocate storage again.
 	retry := call("POST", "/api/projects?name=remote", "<h1>initial</h1>", "text/html", "browser_upload_1", 0, false)
 	if retry.Code != 200 {
@@ -103,7 +139,7 @@ func TestBrowserLifecycleUsesRemoteStorageAndCurrentAccess(t *testing.T) {
 	}
 	json.Unmarshal(update.Body.Bytes(), &response)
 	pr = response.Project
-	if rec := call("GET", "/"+pr.Slug+"/", "", "", "", 0, false); rec.Code != 200 || rec.Body.String() != "<h1>updated</h1>" {
+	if rec := call("GET", "/"+pr.Slug+"/", "", "", "", 0, false); rec.Code != 200 || (!strings.HasPrefix(rec.Body.String(), "<h1>updated</h1>") || !strings.Contains(rec.Body.String(), `data-drop-watermark="runonflux"`)) {
 		t.Fatal(rec.Code, rec.Body.String())
 	}
 	private := call("PUT", "/api/projects/"+pr.ID+"/privacy", `{"private":true,"password":"a very long test password"}`, "application/json", "", pr.Revision, false)
@@ -120,7 +156,7 @@ func TestBrowserLifecycleUsesRemoteStorageAndCurrentAccess(t *testing.T) {
 		t.Fatal(unlock.Code, unlock.Body.String())
 	}
 	cookies = append(cookies, unlock.Result().Cookies()...)
-	if rec := call("GET", "/"+pr.Slug+"/", "", "", "", 0, true); rec.Code != 200 || rec.Body.String() != "<h1>updated</h1>" {
+	if rec := call("GET", "/"+pr.Slug+"/", "", "", "", 0, true); rec.Code != 200 || (!strings.HasPrefix(rec.Body.String(), "<h1>updated</h1>") || !strings.Contains(rec.Body.String(), `data-drop-watermark="runonflux"`)) {
 		t.Fatal("remote private navigation failed", rec.Code, rec.Body.String())
 	}
 	if rec := call("GET", "/api/storage/apps", "", "", "", 0, false); rec.Code != 404 {

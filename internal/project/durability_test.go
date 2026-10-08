@@ -49,6 +49,8 @@ func TestProjectDurabilityLifecycle(t *testing.T) {
 	want(kv.Local, err)
 	p, err := repo.Activate(ctx, a, r.Operation.ID)
 	want(kv.Local, err)
+	p, err = repo.SetWatermark(ctx, a, p.ID, p.Revision, false)
+	want(kv.Replicated, err)
 	p, err = repo.SetPrivacy(ctx, a, p.ID, p.Revision, strings.Repeat("b", 64), p.PolicyRevision+1)
 	want(kv.Replicated, err)
 	r, err = repo.Reserve(ctx, a, Reservation{Key: "update_one", ProjectID: p.ID, ExpectedRevision: p.Revision, Digest: strings.Repeat("c", 64), Bytes: 20})

@@ -344,11 +344,13 @@ func TestFirestoreShortHashCollisionIsNotDuplicate(t *testing.T) {
 		t.Fatal(err)
 	}
 	two := Reservation{Key: "short-hash-two", Name: "same", Digest: "abcdef" + strings.Repeat("2", 58), Bytes: 1}
-	if _, err := r.Reserve(ctx, a, two); !errors.Is(err, ErrConflict) {
-		t.Fatal("short hash collision incorrectly accepted or deduplicated")
+	second, err := r.Reserve(ctx, a, two)
+	if err != nil || second.Project.Slug != "same-abcdef" || second.Project.ID == prepared.Project.ID {
+		t.Fatal("short collision treated as duplicate", second, err)
 	}
-	two.Name = "different"
-	if _, err := r.Reserve(ctx, a, two); err != nil {
-		t.Fatal("full hashes were not distinguished")
+	third, err := r.Reserve(ctx, a, Reservation{Key: "short-hash-three", Name: "same", Digest: "abcdef" + strings.Repeat("3", 58), Bytes: 1})
+	if err != nil || third.Project.Slug != "same-abcdef3333" {
+		t.Fatal("short suffix collision did not extend suffix", third, err)
 	}
+
 }
