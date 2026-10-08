@@ -1,10 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { CONTAINER_DATA, authHeader, stickyBackend, requestOptions, wireSpec, changeContainerData, remainingBlocks, signingMessage, redactSpec, encryptPayload, decryptPayload } from '../../scripts/flux-deploy.mjs';
+import { CONTAINER_DATA, authHeader, stickyBackend, requestOptions, wireSpec, changeContainerData, remainingBlocks, signingMessage, redactSpec, encryptPayload, decryptPayload, unconfirmedMessages } from '../../scripts/flux-deploy.mjs';
 
 const component = { name: 'storage', containerData: 'r:/data', cpu: 0.5, ram: 1000, hdd: 100, ports: [35447], containerPorts: [35447], commands: [], environmentParameters: ['DROP_ROLE=secondary', 'DROP_PRIMARY_APP_NAME=drop', 'DROP_STORAGE_API_KEYS_JSON={"v1":"private+secret=value"}'], repoauth: 'private-password' };
 const spec = { version: 8, name: 'dropstoragea', owner: 'wallet', instances: 3, expire: 88000, height: 3000000, hash: 'original', datacenter: false, staticip: false, enterprise: '', contacts: ['private@example.com'], compose: [component], _wasEnterprise: true };
+
+test('confirmed temporary registration is ignored only by exact chain hash; pending updates still block', () => {
+  const confirmed = { hash: spec.hash, appSpecifications: { name: spec.name }, type: 'fluxappregister' };
+  const pending = { hash: 'new-update', appSpecifications: { name: spec.name }, type: 'fluxappupdate' };
+  assert.deepEqual(unconfirmedMessages([confirmed, pending], spec.name, spec), [pending]);
+  assert.deepEqual(unconfirmedMessages([confirmed], spec.name), [confirmed]);
+  assert.deepEqual(unconfirmedMessages([confirmed], spec.name, { ...spec, height: 0 }), [confirmed]);
+  assert.deepEqual(unconfirmedMessages([confirmed], 'otherapp', spec), []);
+  assert.throws(() => unconfirmedMessages(null, spec.name, spec));
+});
 
 test('Flux request bodies retain nested objects, numeric types, booleans and literal JSON env', () => {
   const payload = { type: 'fluxappupdate', version: 1, appSpecification: wireSpec(spec), timestamp: 1791000000000, signature: 's+/=' };

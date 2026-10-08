@@ -34,6 +34,13 @@ values, contacts, commands and repository credentials are removed. You can copy
 that reviewed redacted version into `deploy/flux/templates/` to retain a template
 in Git; all placeholders must be filled privately before registration.
 
+`deploy/flux/templates/dropstoragea.json` records the original deployed secondary
+specification with its secret replaced by a placeholder. It is a source template,
+not an immediately deployable configuration: the original had `r:/data` and no
+mapped ports. For a new deployment set the complete Container Data string below
+and map its configured direct TLS storage port to the same container port. The
+original full decrypted backup remains in the private snapshot directory.
+
 ## Update Container Data
 
 ```bash
@@ -59,7 +66,9 @@ node scripts/flux-deploy.mjs submit --session secrets/flux-deploy/session-TIMEST
 ```
 
 Submission checks the message hash, ownership, freshness, pending messages, and
-the deployed spec's hash/height. It saves the accepted transaction before looking
+the deployed spec's hash/height. Temporary messages whose hash exactly matches
+the confirmed deployed specification are recognized as already confirmed; other
+messages for the app block preparation/submission. It saves the accepted transaction before looking
 up any required payment address. Paid submissions print the Flux amount, address
 and transaction hash to use as the payment memo. Payment is a separate wallet
 action. Do not blindly retry a submission after a network timeout: inspect Flux

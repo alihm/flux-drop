@@ -137,10 +137,18 @@ async function sessionFor(o) {
   trustedBackend(session.stickyBackend);
   return session;
 }
-async function assertNoPending(name, session) {
-  const messages = (await request(session.stickyBackend, '/apps/temporarymessages', { session })).data;
+export function unconfirmedMessages(messages, name, confirmed) {
   if (!Array.isArray(messages)) throw new Error('Cannot check pending app messages');
-  if (messages.some(m => [m.appSpecifications, m.zelAppSpecifications, m.appSpecification].some(s => s?.name === name))) throw new Error('App has a pending registration/update; wait for confirmation before preparing another');
+  return messages.filter(m => {
+    if (![m.appSpecifications, m.zelAppSpecifications, m.appSpecification].some(s => s?.name === name)) return false;
+    // Flux retains temporary messages after chain confirmation. Only the exact
+    // hash of the confirmed spec can be dismissed without guessing by age.
+    return !(confirmed?.name === name && Number.isSafeInteger(confirmed.height) && confirmed.height > 0 && confirmed.hash && m.hash === confirmed.hash);
+  });
+}
+async function assertNoPending(name, session, confirmed) {
+  const messages = (await request(session.stickyBackend, '/apps/temporarymessages', { session })).data;
+  if (unconfirmedMessages(messages, name, confirmed).length) throw new Error('App has a pending registration/update; wait for confirmation before preparing another');
 }
 function assertComplete(spec) {
   if (JSON.stringify(spec).includes('<PRIVATE_') || JSON.stringify(spec).includes('<REPLACE_')) throw new Error('Template still contains unfilled placeholders');
@@ -191,8 +199,8 @@ export async function main(args = process.argv.slice(2)) {
     let original, dir, plain;
     if (action === 'update') {
       const name = appName(requireOption(o, 'app'));
-      await assertNoPending(name, session);
       ({ spec: original, dir } = await snapshot(name, session));
+      await assertNoPending(name, session, original);
       plain = o.spec ? await read(o.spec) : structuredClone(original);
       if (plain.name !== original.name || plain.owner !== original.owner || plain.version !== original.version) throw new Error('Update must preserve app name, owner and spec version');
       if (Boolean(original._wasEnterprise) !== Boolean(plain._wasEnterprise || plain.enterprise)) throw new Error('Update must preserve Enterprise protection');
@@ -236,11 +244,12 @@ export async function main(args = process.argv.slice(2)) {
     if (Date.now() - p.timestamp > 10 * 60 * 1000 || p.timestamp > Date.now()) throw new Error('Signing payload is stale; prepare and sign again');
     const receiptFile = path.join(path.dirname(file), 'submission.json');
     try { await fs.access(receiptFile); throw new Error('Submission already recorded; do not submit again'); } catch (err) { if (err.code !== 'ENOENT') throw err; }
-    await assertNoPending(p.appName, session);
+    let current;
     if (p.action === 'update') {
-      const current = await fetchSpec(p.appName, session);
+      current = await fetchSpec(p.appName, session);
       if (current.hash !== p.baseHash || current.height !== p.baseHeight) throw new Error('App specification changed since preparation; prepare again');
     }
+    await assertNoPending(p.appName, session, current);
     const signature = await secretText(requireOption(o, 'signature-file'));
     const txid = (await request(session.stickyBackend, `/apps/app${p.action}`, { session, body: { type: `fluxapp${p.action}`, version: 1, appSpecification: p.spec, timestamp: p.timestamp, signature }, timeout: 120000 })).data;
     // Save the accepted transaction before any follow-up which might fail.
