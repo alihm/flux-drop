@@ -1,0 +1,41 @@
+{
+  "version": 8,
+  "name": "dropstoragea",
+  "description": "dropstoragea",
+  "owner": "15c3aH6y9Koq1Dg1rGXE9Ypn5nL2AbSJCu",
+  "contacts": [],
+  "geolocation": [],
+  "expire": 87967,
+  "nodes": [],
+  "staticip": false,
+  "instances": 2,
+  "compose": [
+    {
+      "name": "dropstorage",
+      "description": "dropstorage",
+      "repotag": "alihmahdavi/flux-drop:staging",
+      "ports": [
+        36447
+      ],
+      "domains": [
+        ""
+      ],
+      "environmentParameters": [
+        "DROP_ROLE=secondary",
+        "DROP_PRIMARY_APP_NAME=drop",
+        "DROP_STORAGE_PORT=36447",
+        "DROP_STORAGE_CAPACITY_BYTES=207374182400",
+        "DROP_STORAGE_API_KEYS_JSON=<PRIVATE_VALUE_REQUIRED>"
+      ],
+      "commands": [],
+      "containerPorts": [
+        36447
+      ],
+      "containerData": "r:/data|ml:state:/var/lib/drop-cluster",
+      "cpu": 0.3,
+      "ram": 1000,
+      "hdd": 200,
+      "repoauth": ""
+    }
+  ]
+}

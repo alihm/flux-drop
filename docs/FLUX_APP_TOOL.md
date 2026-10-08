@@ -41,6 +41,12 @@ mapped ports. For a new deployment set the complete Container Data string below
 and map its configured direct TLS storage port to the same container port. The
 original full decrypted backup remains in the private snapshot directory.
 
+`deploy/flux/templates/dropstoragea.configured.json` records the confirmed update:
+`r:/data|ml:state:/var/lib/drop-cluster`, direct port `36447` mapped to container
+port `36447`, and two instances. It retains a placeholder for the storage API key.
+For new deployments replace the app name/key/available port and choose a fresh
+subscription duration; use `--enterprise true` when preparing registration.
+
 ## Update Container Data
 
 ```bash
