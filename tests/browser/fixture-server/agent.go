@@ -11,10 +11,16 @@ import (
 	"github.com/runonflux/flux-drop/internal/testmetadata"
 )
 
-// Real consent rendering, cookies and denial transactions, with a test-only CAS
-// backend. Firebase sign-in is intentionally not simulated as a real identity.
+// Real consent rendering, cookies and grant transactions, with test-only CAS
+// metadata and signed Firebase fixtures. No real Firebase identity is used.
 func registerAgentFixtures(mux *http.ServeMux) {
-	config, err := httpserver.AgentAuthFromEnv(func(string) string { return "" })
+	registerAgentFirebaseFixtures(mux)
+	config, err := httpserver.AgentAuthFromEnv(func(key string) string {
+		if key == "DROP_AGENT_AUTHORIZE_URL" {
+			return "https://127.0.0.1:18443/apps/oauth/authorize"
+		}
+		return ""
+	})
 	if err != nil {
 		panic(err)
 	}
@@ -33,4 +39,12 @@ func registerAgentFixtures(mux *http.ServeMux) {
 	}
 	mux.Handle("/oauth/", handler)
 	mux.Handle("/.well-known/", handler)
+	// The website changes only the routing path. Preserve query, body, browser
+	// headers and host-only cookie exactly as the production forwarder does.
+	mux.HandleFunc("/apps/oauth/authorize", func(w http.ResponseWriter, r *http.Request) {
+		forward := r.Clone(r.Context())
+		forward.URL.Path = "/oauth/authorize"
+		forward.URL.RawPath = ""
+		handler.ServeHTTP(w, forward)
+	})
 }

@@ -44,6 +44,9 @@ No production credentials, Firestore records, or real project files are used.
 - Private documents, scripts, and images cannot be read/embedded by another project.
 - Private separate-file module builds stay blocked: no credentialed null-origin CORS.
 - Authorization precedes HEAD, range, conditional, and internal redirect delivery.
+- Consent supports a website proxy on a different origin and sub-path, retaining
+  host-only cookie/CSRF binding, CSP and Drop's issuer. Allow uses signed Firebase
+  fixtures and a mock popup SDK with the real Go consent/grant handlers.
 
 The fixture's `/manage` creates an in-memory test session, and `/api/unlock`
 unlocks fixture content without a password after origin/CSRF checks. Neither

@@ -35,7 +35,9 @@ The existing `GET /api/config` adds `agentAuthEnabled: boolean`.
 4. The client fetches Drop's authorization-server metadata, registers a public
    client (or supplies an HTTPS Client ID Metadata Document), and starts an
    authorization-code flow with mandatory PKCE S256, state and a registered
-   callback. The resource indicator, when supplied, must match exactly.
+   callback. Discovery advertises `https://runonflux.com/apps/oauth/authorize`
+   by default, so Firebase Google popup sign-in runs on the authorized website
+   domain. The resource indicator, when supplied, must match exactly.
 5. Drop's browser consent page authenticates the user using its local Firebase
    bundle, verifies the signed ID token against Google's securetoken JWKS,
    exchanges the Firebase refresh token, and checks the returned user ID.
@@ -56,6 +58,15 @@ The website must distinguish its accepted Firebase JWTs from Drop's opaque
 MCP gateway: it is rejected as a loop guard. The forwarded marker is routing
 information, not authentication, and is not forwarded upstream.
 
+The website forwards **GET and POST `/apps/oauth/authorize`** to
+`D/oauth/authorize`, preserving the raw query string/body, browser `Origin` and
+`Sec-Fetch-*` headers. It forwards only the `__Host-drop-agent` cookie in both
+directions and preserves Drop's response status and headers, including CSP,
+X-Frame-Options, Cross-Origin-Opener-Policy and Location. Do not replace browser
+Origin with Drop's origin. Direct GET/POST on Drop's `/oauth/authorize` continues
+to work; a deployment using direct Google sign-in must authorize that serving
+domain in Firebase. The callback `iss` always identifies Drop, never the website.
+
 ## Exact endpoint contracts
 
 All JSON errors below use
@@ -73,7 +84,7 @@ duplicate parameters are rejected. Only public clients are supported.
 ```json
 {
   "issuer":"https://drop.app.runonflux.io",
-  "authorization_endpoint":"https://drop.app.runonflux.io/oauth/authorize",
+  "authorization_endpoint":"https://runonflux.com/apps/oauth/authorize",
   "token_endpoint":"https://drop.app.runonflux.io/oauth/token",
   "registration_endpoint":"https://drop.app.runonflux.io/oauth/register",
   "revocation_endpoint":"https://drop.app.runonflux.io/oauth/revoke",
@@ -138,7 +149,8 @@ No client-controlled logo is fetched or rendered on the consent page.
 
 ### Authorization and consent
 
-`GET D/oauth/authorize` query:
+Browser authorization uses `DROP_AGENT_AUTHORIZE_URL`; the website forwards to
+`GET D/oauth/authorize` with this query unchanged:
 
 ```text
 response_type=code
@@ -156,7 +168,9 @@ resource=https://runonflux.com/apps/mcp  # optional; exact configured resource
 return 303 with `Location: <callback>?error=<OAuth error>&state=<state>&iss=<D>`
 (preserving existing callback query parameters). Supported scopes are `orbit`
 and `drop`. Pending requests expire after 10 minutes and may be redeemed once.
-Authorization initiation is limited to 60 requests/IP/minute.
+Authorization initiation is limited to 600 requests/IP/minute, allowing for
+website proxies sharing a small number of server addresses. Registration retains
+its separate 20 requests/IP/minute limit.
 
 The consent page uses Google or email/password, shows the signed-in email,
 client trust information, redirect host, a loopback warning, and requested
@@ -164,15 +178,19 @@ capabilities. Firebase must have the chosen sign-in provider enabled; password
 accounts must verify their email first. Reset password uses Firebase's normal
 email reset flow. Switching accounts is available before allowing access.
 
-`POST D/oauth/authorize`, same-origin JSON, requires the bound cookie:
+The consent page POSTs JSON to its own `window.location.pathname`, which the
+website forwards to `POST D/oauth/authorize`. It requires the bound cookie:
 
 ```json
 {"handle":"<opaque handle from rendered page>","csrf":"<CSRF from rendered page>","action":"allow","idToken":"<user.getIdToken(true)>","refreshToken":"<user.refreshToken>"}
 ```
 
 For denial use `{"handle":"...","csrf":"...","action":"deny"}`; no Firebase
-credentials are needed. The handler checks the exact Origin, same-origin fetch
-metadata, cookie binding and CSRF. Allow verifies RS256 signature, issuer,
+credentials are needed. The handler accepts only the exact Drop origin or the
+origin of `DROP_AGENT_AUTHORIZE_URL` (not every `DROP_AGENT_WEBSITE_ORIGINS`
+entry). The existing same-origin fetch-metadata rule, cookie binding and CSRF
+checks still apply; an explicit cross-site or same-site `Sec-Fetch-Site` is
+rejected. Allow verifies RS256 signature, issuer,
 audience, expiry, verified email, no tenant, and Google/password provider; the
 refresh exchange must return the same UID. Connections are capped at 50 active
 grants/user. No Firebase credentials are returned to the MCP client.
@@ -441,8 +459,13 @@ Consent sets only `__Host-drop-agent`: Secure, HttpOnly, Path=/, **no Domain**,
 SameSite=Lax, Max-Age=600, expiry ten minutes. Its random value is hashed in each
 pending record; multiple pending requests in the same browser can share the
 binding cookie. Each request has its own hashed CSRF token. Only same-origin
-`POST /oauth/authorize` uses it. Consent pages cannot be framed and all inline
-CSS/JS, including the local Firebase bundle, are CSP-hashed. Tokens never appear
+`POST /oauth/authorize` uses it. Through the website proxy it is host-only on the
+website; direct Drop consent has its own host-only cookie. It needs no Domain or
+path rewriting. Consent pages cannot be framed and all inline CSS/JS, including
+the local Firebase bundle, are CSP-hashed. `connect-src 'self'` follows the serving
+origin, Firebase's script/frame/connect sources are retained, and
+`Cross-Origin-Opener-Policy: same-origin-allow-popups` permits Google sign-in.
+Brand links always point to Drop's absolute origin. Tokens never appear
 in page URLs or callback query strings except the short-lived OAuth code.
 
 Discovery, registration, token and revocation support browser MCP clients from
@@ -472,13 +495,18 @@ on container port 8080 routes to Go's loopback listener. Defaults:
 | Setting | Default |
 | --- | --- |
 | `DROP_AGENT_AUTH_ENABLED` | `true` |
+| `DROP_AGENT_AUTHORIZE_URL` | `https://runonflux.com/apps/oauth/authorize` |
 | `DROP_AGENT_RESOURCE` | `https://runonflux.com/apps/mcp` |
 | `DROP_AGENT_MCP_UPSTREAM` | `https://runonflux.com/apps/mcp` |
 | `DROP_AGENT_RESOURCE_METADATA` | `https://runonflux.com/apps/.well-known/oauth-protected-resource` |
 | `DROP_AGENT_WEBSITE_ORIGINS` | `https://runonflux.com` (comma-separated HTTPS origins) |
 
 Resource/upstream/metadata overrides must be HTTPS without credentials/fragments;
-website origins must have no path/query. Reuse `DROP_PUBLIC_ORIGIN`,
+`DROP_AGENT_AUTHORIZE_URL` must additionally have no query (including an empty
+`?`) or fragment. Its path can be arbitrary, and its origin joins Drop's origin
+as an allowed consent POST origin. Only discovery's `authorization_endpoint`
+changes; issuer, token, registration, revocation and callback `iss` stay on Drop.
+Website origins must have no path/query. Reuse `DROP_PUBLIC_ORIGIN`,
 `FIREBASE_PROJECT_ID`, `DROP_FIREBASE_WEB_API_KEY` and
 `DROP_FIREBASE_WEB_APP_ID`. Production defaults to `fluxcore-prod` and its bundled
 public web identifiers. When publishing is disabled, upload-link creation returns 503
@@ -548,8 +576,11 @@ The Go suites use fake securetoken/JWKS/upstream servers, real RSA signatures an
 transactional CAS test storage: binding/expiry, provider/UID checks, rotation and
 replay revocation, cross-primary use, encrypted state, CORS, scoped streaming and
 idempotent owned uploads. Browser consent tests exercise the real embedded page,
-CSP, cookies, denial and escaping across Chromium, Firefox and WebKit; they do
-not require real Google/password accounts or automated real-user login.
+CSP, cookies, denial and escaping across Chromium, Firefox and WebKit. An Allow
+test serves consent under `/apps/oauth/authorize` on a different fixture origin,
+using a mock popup SDK plus signed fixture JWTs/JWKS/securetoken to exercise real
+Go consent and grant transactions. They do not require real Google/password
+accounts or automated real-user login.
 
 References: [MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization),
 [RFC 8252 native callbacks](https://www.rfc-editor.org/rfc/rfc8252),
