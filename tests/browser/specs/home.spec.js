@@ -128,3 +128,30 @@ test('an unreadable dropped folder gives a usable fallback',async({page})=>{
   await expect(page.locator('#status')).toContainText('Use Choose folder instead');
   await expect(page.locator('#selection-stage')).toBeHidden();
 });
+
+test('signed-in users can list and disconnect agents with Firebase bearer and no cookies', async ({page, context}) => {
+  const origin = new URL(process.env.DROP_TEST_BASE_URL || 'https://localhost:18443').origin;
+  await context.addCookies([{name: 'management-cookie', value: 'private', url: origin, secure: true}]);
+  await page.addInitScript(() => {
+    window.DropAuth = {init() {}, current: () => ({uid: 'alice', email: 'alice@example.com'}), credentials: async () => ({uid: 'alice', idToken: 'firebase-test-token'})};
+  });
+  await page.route('**/api/config', route => route.fulfill({json: {publishingEnabled: true, authenticationEnabled: true, agentAuthEnabled: true, firebase: {projectId: 'fluxcore-prod'}, limits: {uploadBytes: 52428800, files: 5000}}}));
+  await page.route('**/api/session', route => route.fulfill({json: {csrfToken: 'csrf', authenticated: true, user: {uid: 'alice'}}}));
+  await page.route('**/api/projects', route => route.fulfill({json: {projects: [], nextCursor: ''}}));
+  await page.route('**/api/agent-keys', route => route.fulfill({json: {keys: []}}));
+  let connected = true;
+  await page.route('**/api/agent-grants**', async route => {
+    const headers = await route.request().allHeaders();
+    expect(headers.authorization).toBe('Bearer firebase-test-token');
+    expect(headers.cookie).toBeUndefined();
+    if (route.request().method() === 'DELETE') { connected = false; return route.fulfill({status: 204}); }
+    return route.fulfill({json: {agents: connected ? [{id: 'grant-id', name: 'Coding agent', domain: 'agent.example', scope: ['orbit', 'drop'], connectedAt: '2026-10-09T00:00:00Z', lastUsedAt: null}] : []}});
+  });
+  await page.goto('/');
+  await expect(page.locator('#agent-connections')).toBeVisible();
+  await expect(page.locator('#agent-connections-list')).toContainText('Coding agent');
+  await expect(page.locator('#agent-connections-list')).toContainText('agent.example');
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', {name: 'Disconnect', exact: true}).click();
+  await expect(page.locator('#agent-connections-list')).toContainText('No connected agents.');
+});

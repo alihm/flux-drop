@@ -91,6 +91,22 @@ must remain outside images, public Flux environment parameters and replicated
 Staging Basic access gates management/upload/unlock, while public project assets
 remain public for sandbox compatibility.
 
+## Agent browser sign-in
+
+Primary/standalone Raft instances host OAuth 2.1 sign-in for the Flux Apps MCP
+resource, with Google or verified email/password accounts, PKCE, rotating tokens,
+and revocable connections. No new required settings or ports are needed.
+The MCP gateway exchanges agent access for fresh Firebase identity; website pages
+use bearer-only connections and single-use Drop upload links.
+
+New routes: `GET /.well-known/oauth-authorization-server`,
+`GET /.well-known/openid-configuration`, `POST /oauth/register`,
+`GET/POST /oauth/authorize`, `POST /oauth/token`, `POST /oauth/revoke`,
+`GET/POST/DELETE /agent/mcp`, `GET /api/agent-grants`,
+`DELETE /api/agent-grants/{id}`, `POST /api/agent/upload-links`, and
+`PUT /api/agent/uploads/{ticket}`. See the
+[exact integration contract, settings, storage and security](docs/AGENT_SIGNIN.md).
+
 ## Verify
 
 ```sh
@@ -115,6 +131,6 @@ replica fallback. Public prebuilt React/Vue bundles work within the
 
 See [storage budgets](docs/STORAGE.md),
 [reclamation requirements](docs/RECLAMATION.md), [session APIs](docs/SESSIONS.md),
-[publishing APIs](docs/PUBLISHING.md), [frontend configuration](docs/FRONTEND.md),
+[publishing APIs](docs/PUBLISHING.md), [agent browser sign-in and MCP APIs](docs/AGENT_SIGNIN.md), [frontend configuration](docs/FRONTEND.md),
 and [replica internals](docs/REPLICAS.md). Historical progress notes in those files
 are superseded by the staging runtime and deployment guides above.

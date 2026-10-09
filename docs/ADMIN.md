@@ -1,6 +1,6 @@
 # Primary administration
 
-The current build was published on 2026-10-08 as `alihmahdavi/flux-drop:staging`, registry digest `sha256:9ffcc23ba708a4abf55f59c8975577c07d8265c453b6b2263b1440335214b9dd`. It includes the public claim sign-in dialog, seven-day expiry for new anonymous projects, and [320 × 180 project thumbnails with a claimed-public-only Explore gallery](PREVIEWS.md). Verification includes the full Go race suite and focused follow-up race checks, Go vet, twelve admin browser checks from the admin build, twenty-four authentication/claim/gallery checks across Chromium/Firefox/WebKit, production-renderer and sandbox image checks, and isolated primary/secondary startup tests. Two WebKit checks exceeded their timeout during concurrent compilation; all four WebKit authentication checks passed when rerun without the compiler. Browser screenshots use sample data, not deployed capacity.
+The last recorded staging publication was on 2026-10-08 as `alihmahdavi/flux-drop:staging`, registry digest `sha256:9ffcc23ba708a4abf55f59c8975577c07d8265c453b6b2263b1440335214b9dd`. It includes the public claim sign-in dialog, seven-day expiry for new anonymous projects, and [320 × 180 project thumbnails with a claimed-public-only Explore gallery](PREVIEWS.md). Verification includes the full Go race suite and focused follow-up race checks, Go vet, twelve admin browser checks from the admin build, twenty-four authentication/claim/gallery checks across Chromium/Firefox/WebKit, production-renderer and sandbox image checks, and isolated primary/secondary startup tests. Two WebKit checks exceeded their timeout during concurrent compilation; all four WebKit authentication checks passed when rerun without the compiler. Browser screenshots use sample data, not deployed capacity.
 
 Open `https://drop.app.runonflux.io/admin/` on the primary. The authorized ZelID defaults to `15c3aH6y9Koq1Dg1rGXE9Ypn5nL2AbSJCu`. `DROP_ADMIN_ZELID` optionally overrides it with one valid P2PKH ZelID. Secondaries do not expose this page. No extra ports or API keys are needed for browser administration.
 
@@ -32,3 +32,28 @@ Roll out the new image to every primary replica before relying on consistent das
 | POST | `/admin/api/apps/{appName}` | Apply `{"action":"drain"}`, `{"action":"remove"}`, or `{"action":"restore"}` |
 
 All data and action endpoints require wallet authentication. Browser POSTs require the exact primary public origin. Logout and app actions additionally require `X-CSRF-Token`. The native callback accepts JSON or URL-encoded form data with `message` (or `loginPhrase`) and `signature`; it grants no session directly. Login requests are limited to 20 challenges per minute across the primary app. Durable storage uses 256 challenge slots and 2,048 session slots; overwritten records fail closed.
+
+## User agent connections
+
+Agent OAuth connections use Firebase user sign-in and are separate from Zelcore
+administration. Users view/disconnect them in the main page's API keys section;
+wallet administration does not expose Firebase refresh tokens or OAuth secrets.
+See [AGENT_SIGNIN.md](AGENT_SIGNIN.md) for exact JSON, cookie/CORS behavior and
+revocation. Primary/standalone Raft deployments additionally expose:
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| GET | `/.well-known/oauth-authorization-server` | OAuth metadata |
+| GET | `/.well-known/openid-configuration` | Same discovery metadata |
+| POST | `/oauth/register` | Public client registration |
+| GET / POST | `/oauth/authorize` | Consent page / bound consent redemption |
+| POST | `/oauth/token` | Code exchange and rotating refresh |
+| POST | `/oauth/revoke` | Revoke a connection using a token |
+| GET / POST / DELETE | `/agent/mcp` | Authenticated streaming MCP gateway |
+| GET | `/api/agent-grants` | Caller's connections, Firebase bearer only |
+| DELETE | `/api/agent-grants/{id}` | Disconnect caller's agent |
+| POST | `/api/agent/upload-links` | Google-user upload capability |
+| PUT | `/api/agent/uploads/{ticket}` | Publish or replace once; idempotent receipt |
+
+CORS preflight OPTIONS is available on discovery, registration, token, revocation,
+connections and upload-link endpoints. These do not use the admin wallet session.

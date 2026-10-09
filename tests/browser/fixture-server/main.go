@@ -46,6 +46,7 @@ func sessionFor(r *http.Request) *session {
 func main() {
 	mux := http.NewServeMux()
 	registerWatermarkFixtures(mux)
+	registerAgentFixtures(mux)
 	mux.Handle("/{$}", httpserver.HomePage())
 	mux.Handle("/unlock/", httpserver.UnlockPage())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
