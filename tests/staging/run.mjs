@@ -31,11 +31,21 @@ async function ready(){
   for(let i=0;i<90;i++){try{if((await fetch(base+'/readyz',{signal:AbortSignal.timeout(1000)})).status===200)return}catch{};await new Promise(r=>setTimeout(r,1000))}
   throw Error('staging container did not become ready');
 }
+async function authReady(){
+  // Drop's readiness probes Firestore, not Firebase Auth. Compose starts the
+  // emulators independently, so wait for Auth before attempting its first login.
+  for(let i=0;i<90;i++){
+    try{if((await fetch(auth+'/emulator/v1/projects/demo-drop-staging/config',{signal:AbortSignal.timeout(1000)})).status===200)return}catch{}
+    await new Promise(r=>setTimeout(r,1000));
+  }
+  throw Error('Firebase Auth emulator did not become ready');
+}
 function contentWithoutWatermark(body){
   assert.match(body,/<a data-drop-watermark="runonflux"[^>]+href="https:\/\/runonflux.com\/apps\/drop"/);
   return body.replace(/<a data-drop-watermark="runonflux"[^>]*>[\s\S]*?<\/a>/,'');
 }
 await ready();
+await authReady();
 await call('/api/config',{anonymous:true,status:401});
 assert.equal((await call('/api/config')).data.publishingEnabled,true);
 csrf=(await call('/api/session',{method:'POST'})).data.csrfToken;

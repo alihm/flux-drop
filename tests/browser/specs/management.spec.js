@@ -25,6 +25,9 @@ test('rename uses the current revision and stops stale mutations',async({page})=
 });
 
 test('privacy controls submit the password without rendering it and delete requires exact confirmation',async({page})=>{
+  // This flow opens several animated panels. WebKit on shared CI runners can
+  // need more than the default 20 seconds; retain the normal assertion limits.
+  test.setTimeout(45_000);
   const state=await setup(page);let deletions=0;
   await page.route(`**/api/projects/${id}/privacy`,async route=>{
     expect(route.request().postDataJSON()).toEqual({private:true,password:'a long private password'});
