@@ -142,9 +142,13 @@ func (s *state) Apply(log *raft.Log) any {
 func (s *state) read(keys []string) map[string]Record {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return copyRecords(s.records, keys)
+}
+
+func copyRecords(records map[string]Record, keys []string) map[string]Record {
 	result := make(map[string]Record, len(keys))
 	for _, key := range keys {
-		if r, ok := s.records[key]; ok {
+		if r, ok := records[key]; ok {
 			r.Value = bytes.Clone(r.Value)
 			result[key] = r
 		}

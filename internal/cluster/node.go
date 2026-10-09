@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go.etcd.io/bbolt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,17 +15,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/runonflux/flux-drop/internal/kv"
-
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/raft"
 	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
-	"go.etcd.io/bbolt"
+	"github.com/runonflux/flux-drop/internal/kv"
+	"golang.org/x/sync/singleflight"
 )
 
 const operationTimeout = 5 * time.Second
 
 type Node struct {
+	readFence  singleflight.Group
+	readMu     sync.Mutex
+	readLease  time.Time
+	readTerm   uint64
 	raft       *raft.Raft
 	state      *state
 	store      *raftboltdb.BoltStore
@@ -204,13 +208,38 @@ func (n *Node) wait(ctx context.Context, submit func() raft.Future) error {
 }
 
 func (n *Node) fence(ctx context.Context) error {
-	if n.raft.State() != raft.Leader {
-		return ErrNotLeader
+	// Coalesce only in-flight confirmations, never reuse a completed fence for a
+	// new transaction. Each joined caller takes its own current snapshot after
+	// arrival, under the bounded same-term authority proof.
+	result := n.readFence.DoChan("fence", func() (any, error) {
+		bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), operationTimeout)
+		defer cancel()
+		if n.raft.State() != raft.Leader {
+			return nil, ErrNotLeader
+		}
+		term := n.raft.CurrentTerm()
+		started := time.Now()
+		if err := n.wait(bounded, n.raft.VerifyLeader); err != nil {
+			return nil, fmt.Errorf("quorum verification: %w", err)
+		}
+		if err := n.wait(bounded, func() raft.Future { return n.raft.Barrier(operationTimeout) }); err != nil {
+			return nil, err
+		}
+		if n.raft.State() != raft.Leader || n.raft.CurrentTerm() != term || time.Since(started) >= authorityWindow {
+			return nil, ErrNotLeader
+		}
+		n.readMu.Lock()
+		n.readLease = started.Add(authorityWindow)
+		n.readTerm = term
+		n.readMu.Unlock()
+		return nil, nil
+	})
+	select {
+	case r := <-result:
+		return r.Err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	if err := n.wait(ctx, n.raft.VerifyLeader); err != nil {
-		return fmt.Errorf("quorum verification: %w", err)
-	}
-	return n.wait(ctx, func() raft.Future { return n.raft.Barrier(operationTimeout) })
 }
 
 // Read never returns a follower's potentially stale authorization metadata.

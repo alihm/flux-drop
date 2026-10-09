@@ -1,0 +1,80 @@
+Drop serving performance
+
+Reproduce the read-only load probe:
+  node scripts/serving-load.mjs https://drop.app.runonflux.io /deep-zoom/ 400 50
+It warms persistent connections, discovers up to 20 Explore thumbnails and the
+same-origin src/href assets of the selected site, and reports status counts and
+p50/p95/p99 milliseconds. It never sends credentials or changes projects.
+
+Controlled handler benchmark, 400 requests / 50 connections / 20 thumbnails /
+30 site assets, using identical test fixtures on commit 3d6d047 and this change:
+                       before p50/p95/p99        after p50/p95/p99 (ms)
+  all                  39.20/135.44/175.01       16.59/31.72/39.26
+  thumbnails           15.34/97.34/137.55        16.27/34.51/43.52
+  site authorization   50.83/148.01/175.01       17.12/29.11/34.90
+Final measurements were taken with builds and browser workloads stopped.
+These are isolated handler/queue measurements with in-memory metadata, not
+production network or Nginx transfer measurements. All 400 responses were 200.
+  DROP_TEST_SERVING_LOAD=1 go test -v ./internal/httpserver -run '^TestServingLoadMeasurements$'
+
+Incremental verification measurements:
+  30-file / 7.5 MiB site's warm asset preparation: ~8 ms -> ~0.04 ms/request.
+  Three-key real Raft transaction: p50 7.03 -> 3.23 ms, p95 11.33 -> 7.88 ms.
+  Public thumbnail: two authorization transactions -> one checked transaction.
+  Warm Explore: no metadata RPCs; measured metadata phase ~0.003 ms.
+  Config: no metadata RPCs; measured app phase ~0.013 ms.
+  go test ./internal/httpserver -run '^$' -bench BenchmarkSiteAssets -benchtime=300ms
+  go test -v ./internal/cluster -run TestTransactionReadPerformanceAndRevocation
+
+Live pre-change baseline from this host (100 mixed requests, 50 connections):
+  all: p50 1512 / p95 2785 / p99 4190 ms
+  thumbnails: p50 1538 / p95 2746 / p99 2859 ms
+Network performance after deployment must be measured again at the same origin.
+
+Instrumentation
+Server-Timing reports exclusive metadata, verify and file preparation phases,
+plus total Go app time through response-header commitment. For Nginx internal
+redirects, Go cannot report sendfile or final transfer duration in an already
+sent header. Nginx separately logs slow requests with total request_time and the
+Server-Timing header. Go logs requests over one second, excluding query strings,
+cookies, credentials and upload-ticket secrets. Public 503s include Retry-After.
+pprof is on 127.0.0.1:6060 inside the container only, using a separate mux; no new
+environment setting or public port is needed. Use docker exec/container-local
+HTTP access to /debug/pprof/; never publish this socket externally.
+
+Integrity and authorization
+The integrity LRU is process-local: at most 256 versions and 32768 aggregate
+stat/manifest entries. Four cold verifications may run at once; concurrent
+requests for one version share a verification. Cache hits compare the manifest,
+requested file and ancestor directories' inode, size, mode and modification time.
+Changes trigger a complete manifest/hash verification. This relies on published
+content being immutable; undetectable bit flips with identical stat information
+require a later cache miss to discover. No access decision is stored here.
+
+Raft transactions use one same-term leader confirmation, then one unchanged
+state index. The final optimistic revision check does not perform another quorum
+round. Intervening writes retry the transaction. Concurrent confirmations are
+coalesced. Async reads share the existing bounded authority proof and use a
+shared lock on an immutable view. Followers never serve stale metadata: HTTP
+remains available on every primary, while metadata RPCs route to the verified
+leader using pooled, identity-pinned mTLS connections. Older leaders during a
+rolling upgrade retain the conservative per-key fenced protocol.
+
+Authorization linearizes after request arrival. A completed earlier privacy,
+delete or rename is visible; a change during preview IO invalidates the read.
+An operation overlapping a later change may linearize first. Neither a server nor
+metadata Raft can recall bytes already sent or public browser cache entries.
+The requested public cache lifetimes intentionally allow browser reuse after
+privacy changes; these headers must not be described as instant revocation.
+Private responses and pending previews remain no-store. Public file validators
+come from manifest hashes, with a distinct watermark representation identity.
+
+Explore cache lives 20 seconds with singleflight. Publish/update/claim/privacy/
+rename/delete invalidate it locally; other primary instances may lag 20 seconds.
+Public HTTP policies: thumbnail 300 seconds / stale-while-revalidate 86400;
+assets 60 / 600; HTML no-cache; Explore 20 / 120; config 300 seconds.
+Both Explore and thumbnails expose all response headers through wildcard CORS.
+Gzip covers HTML/CSS/JS/JSON/SVG/plain text, including internal file redirects.
+The shipped Nginx image has no Brotli module. Favicon returns 204 with cross-origin
+resource policy. Serving preparation keeps its existing 10-second budget; remote
+content fetches now inherit that budget as well.

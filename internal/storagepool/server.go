@@ -556,7 +556,7 @@ func (s *Secondary) verified(r *http.Request) (content.Manifest, string, error) 
 		return content.Manifest{}, "", content.ErrInvalid
 	}
 	dir := s.version(id, digest)
-	m, err := content.VerifyVersion(dir, digest)
+	m, err := content.ServingVersions.VerifyContext(r.Context(), dir, digest, r.PathValue("path"))
 	return m, dir, err
 }
 func (s *Secondary) manifest(w http.ResponseWriter, r *http.Request) {

@@ -493,6 +493,9 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 				projectError(w, err)
 				return
 			}
+			if deps.Previews != nil {
+				deps.Previews.InvalidateExplore()
+			}
 			w.WriteHeader(204)
 		}
 	}

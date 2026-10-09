@@ -19,6 +19,7 @@ import (
 	"github.com/runonflux/flux-drop/internal/kv"
 	"github.com/runonflux/flux-drop/internal/metadata"
 	"github.com/runonflux/flux-drop/internal/project"
+	"golang.org/x/sync/singleflight"
 )
 
 var idPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
@@ -47,12 +48,17 @@ type Card struct {
 	Claimed       bool      `json:"claimed"`
 }
 type Service struct {
-	Store   *metadata.Store
-	Root    string
-	Render  Renderer
-	queue   chan string
-	mu      sync.Mutex
-	pending map[string]bool
+	exploreMu         sync.Mutex
+	exploreRows       []Card
+	exploreUntil      time.Time
+	exploreGeneration uint64
+	exploreFlight     singleflight.Group
+	Store             *metadata.Store
+	Root              string
+	Render            Renderer
+	queue             chan string
+	mu                sync.Mutex
+	pending           map[string]bool
 }
 
 func New(store *metadata.Store, root string, render Renderer) (*Service, error) {
@@ -72,6 +78,7 @@ func New(store *metadata.Store, root string, render Renderer) (*Service, error) 
 // Notify never blocks upload completion. A bounded background scan recovers
 // notifications lost to overload, process death, or a lost upload response.
 func (s *Service) Notify(p project.Project) {
+	s.InvalidateExplore()
 	if !idPattern.MatchString(p.ID) {
 		return
 	}
@@ -128,15 +135,30 @@ func (s *Service) scan(ctx context.Context, cursor *string) {
 	}
 }
 func (s *Service) Lookup(ctx context.Context, id string) (project.Project, error) {
+	return s.ReadProject(ctx, id, nil)
+}
+
+// ReadProject checks policy and performs bounded preview IO in one optimistic
+// transaction. The final revision check retries if privacy/deletion changed
+// during IO; no second full authorization lookup is needed.
+func (s *Service) ReadProject(ctx context.Context, id string, fn func(project.Project) error) (project.Project, error) {
 	var p project.Project
 	if !idPattern.MatchString(id) {
 		return p, project.ErrNotFound
 	}
-	err := s.Store.Run(ctx, func(tx *metadata.Tx) error { return tx.Get("projects/"+id, &p) })
+	err := s.Store.Run(ctx, func(tx *metadata.Tx) error {
+		if err := tx.Get("projects/"+id, &p); err != nil {
+			return err
+		}
+		if !p.Live(time.Now()) || !digestPattern.MatchString(p.ActiveDigest) {
+			return project.ErrNotFound
+		}
+		if fn != nil {
+			return fn(p)
+		}
+		return nil
+	})
 	if errors.Is(err, metadata.ErrNotFound) {
-		err = project.ErrNotFound
-	}
-	if err == nil && (!p.Live(time.Now()) || !digestPattern.MatchString(p.ActiveDigest)) {
 		err = project.ErrNotFound
 	}
 	return p, err
@@ -276,6 +298,7 @@ func (s *Service) ImagePath(p project.Project) string {
 	return filepath.Join(s.Root, p.ID+"-"+p.ActiveDigest+".jpg")
 }
 func (s *Service) process(ctx context.Context, id string) {
+	defer s.InvalidateExplore()
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	tokenBytes := make([]byte, 16)

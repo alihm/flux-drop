@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/runonflux/flux-drop/internal/content"
+	"github.com/runonflux/flux-drop/internal/httpcache"
 	"github.com/runonflux/flux-drop/internal/project"
 	"golang.org/x/sys/unix"
 )
@@ -23,6 +24,7 @@ type cacheEntry struct {
 	file content.File
 	last time.Time
 	pins int
+	stat os.FileInfo
 }
 type fileCache struct {
 	mu          sync.Mutex
@@ -84,6 +86,17 @@ func (c *fileCache) get(key string) (*os.File, content.File, func(), bool) {
 		delete(c.entries, key)
 		return nil, content.File{}, nil, false
 	}
+	info, err := f.Stat()
+	link, linkErr := os.Lstat(e.path)
+	if err != nil || linkErr != nil || !info.Mode().IsRegular() || !os.SameFile(info, link) || e.stat == nil || !os.SameFile(e.stat, info) || info.Size() != e.file.Size || info.ModTime() != e.stat.ModTime() {
+		f.Close()
+		if e.pins == 0 {
+			_ = os.Remove(e.path)
+			c.used -= e.file.Size
+			delete(c.entries, key)
+		}
+		return nil, content.File{}, nil, false
+	}
 	e.pins++
 	e.last = time.Now()
 	return f, e.file, func() { f.Close(); c.mu.Lock(); e.pins--; c.mu.Unlock() }, true
@@ -127,22 +140,14 @@ func (c *fileCache) put(key string, f *os.File, entry content.File) func() {
 		c.used -= e.file.Size
 		delete(c.entries, oldest)
 	}
-	e := &cacheEntry{path: f.Name(), file: entry, last: time.Now(), pins: 1}
+	info, err := f.Stat()
+	if err != nil {
+		return temporary
+	}
+	e := &cacheEntry{path: f.Name(), file: entry, last: time.Now(), pins: 1, stat: info}
 	c.entries[key] = e
 	c.used += entry.Size
 	return func() { f.Close(); c.mu.Lock(); e.pins--; c.mu.Unlock() }
-}
-func verifyFile(f *os.File, entry content.File) error {
-	h := sha256.New()
-	n, err := io.Copy(h, io.LimitReader(f, entry.Size+1))
-	if err != nil {
-		return err
-	}
-	if n != entry.Size || hex.EncodeToString(h.Sum(nil)) != entry.SHA256 {
-		return content.ErrInvalid
-	}
-	_, err = f.Seek(0, 0)
-	return err
 }
 func (p *Pool) RemotePrivateContent() bool { return true }
 func (p *Pool) ServeProject(w http.ResponseWriter, r *http.Request, pr project.Project, name string) {
@@ -181,18 +186,18 @@ func (p *Pool) serve(w http.ResponseWriter, r *http.Request, pr project.Project,
 	}
 	key := cacheKey(pr, name)
 	if f, entry, release, ok := p.cache.get(key); ok {
-		if verifyFile(f, entry) == nil {
-			defer release()
-			if !check() {
-				return
-			}
-			w.Header().Set("ETag", "\""+entry.SHA256+"\"")
-			http.ServeContent(w, r, name, time.Time{}, f)
+		// get checked the immutable downloaded file's inode, size and mtime.
+		defer release()
+		if !check() {
 			return
 		}
-		release()
-		p.cache.invalidate(key)
+		if httpcache.File(w, r, name, entry.SHA256, pr.Private, !pr.WatermarkDisabled) {
+			return
+		}
+		http.ServeContent(w, r, name, time.Time{}, f)
+		return
 	}
+
 	select {
 	case p.downloads <- struct{}{}:
 		defer func() { <-p.downloads }()
@@ -253,7 +258,9 @@ func (p *Pool) serve(w http.ResponseWriter, r *http.Request, pr project.Project,
 		if !check() {
 			return
 		}
-		w.Header().Set("ETag", "\""+entry.SHA256+"\"")
+		if httpcache.File(w, r, name, entry.SHA256, pr.Private, !pr.WatermarkDisabled) {
+			return
+		}
 		http.ServeContent(w, r, name, time.Time{}, f)
 		return
 	}

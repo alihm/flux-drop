@@ -37,7 +37,7 @@ type proposal struct {
 type asyncWriter struct {
 	node           *Node
 	writeMu        sync.Mutex
-	mu             sync.Mutex
+	mu             sync.RWMutex
 	view           *state
 	term, sequence uint64
 	lease          time.Time
@@ -192,15 +192,8 @@ func (w *asyncWriter) ensure(ctx context.Context) error {
 }
 
 func (w *asyncWriter) read(ctx context.Context, keys []string) (map[string]Record, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if err := w.ensure(ctx); err != nil {
-		return nil, err
-	}
-	return w.view.read(keys), nil
+	records, _, err := w.readSnapshot(ctx, keys, nil)
+	return records, err
 }
 
 // A hint cannot downgrade security fields, unknown collections, or deletions.

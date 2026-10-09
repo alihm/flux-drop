@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/runonflux/flux-drop/internal/content"
+	"github.com/runonflux/flux-drop/internal/httpcache"
 	"github.com/runonflux/flux-drop/internal/project"
 )
 
@@ -68,7 +69,8 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
-		p, err := repository.Resolve(ctx, slug)
+		r = r.WithContext(ctx)
+		p, err := measure(r, "metadata", func() (project.Project, error) { return repository.Resolve(ctx, slug) })
 		if err != nil {
 			if errors.Is(err, project.ErrNotFound) {
 				http.NotFound(w, r)
@@ -81,7 +83,11 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 			http.NotFound(w, r)
 			return
 		}
-		if p.Private && (privateAccess == nil || !privateAccess(r.WithContext(ctx), p) || (file != "" && file != "index.html")) {
+		allowed := false
+		if p.Private && privateAccess != nil {
+			allowed, _ = measure(r, "metadata", func() (bool, error) { return privateAccess(r.WithContext(ctx), p), nil })
+		}
+		if p.Private && (!allowed || (file != "" && file != "index.html")) {
 			if privateAccess != nil && p.Slug == slug && (file == "" || file == "index.html") && r.Header.Get("Sec-Fetch-Mode") == "navigate" && r.Header.Get("Sec-Fetch-Dest") == "document" {
 				http.Redirect(w, r, "/unlock/"+slug, http.StatusSeeOther)
 				return
@@ -102,6 +108,10 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 		if file == "" || strings.HasSuffix(file, "/") {
 			file += "index.html"
 		}
+		if content.ValidatePath(file) != nil {
+			http.NotFound(w, r)
+			return
+		}
 		branded := !p.WatermarkDisabled && htmlFile(file)
 		if branded {
 			r = watermarkRequest(r)
@@ -112,37 +122,44 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 		if p.StorageApp != "" {
 			if fallback != nil && (!p.Private || remotePrivateFallback(fallback)) {
 				if remote, ok := fallback.(AuthorizedProjectFallback); ok {
-					remote.ServeAuthorizedProject(w, r, p, file, func(ctx context.Context) error {
-						current, err := repository.Resolve(ctx, slug)
-						if err != nil {
-							return err
-						}
-						if !current.Live(time.Now()) || current.PolicyRevision != p.PolicyRevision || current.Private != p.Private {
-							return project.ErrNotFound
-						}
-						if current.Slug != p.Slug || current.ActiveDigest != p.ActiveDigest || current.StorageApp != p.StorageApp || current.WatermarkDisabled != p.WatermarkDisabled {
-							return project.ErrStorage
-						}
-						if current.Private && (privateAccess == nil || !privateAccess(r.WithContext(ctx), current)) {
-							return project.ErrNotFound
-						}
-						return nil
+					_, _ = measure(r, "file", func() (bool, error) {
+						remote.ServeAuthorizedProject(w, r, p, file, func(ctx context.Context) error {
+							current, err := measure(r, "metadata", func() (project.Project, error) { return repository.Resolve(ctx, slug) })
+							if err != nil {
+								return err
+							}
+							if !current.Live(time.Now()) || current.PolicyRevision != p.PolicyRevision || current.Private != p.Private {
+								return project.ErrNotFound
+							}
+							if current.Slug != p.Slug || current.ActiveDigest != p.ActiveDigest || current.StorageApp != p.StorageApp || current.WatermarkDisabled != p.WatermarkDisabled {
+								return project.ErrStorage
+							}
+							if current.Private && (privateAccess == nil || !privateAccess(r.WithContext(ctx), current)) {
+								return project.ErrNotFound
+							}
+							return nil
+						})
+						return true, nil
 					})
 				} else {
-					fallback.ServeProject(w, r, p, file)
+					_, _ = measure(r, "file", func() (bool, error) { fallback.ServeProject(w, r, p, file); return true, nil })
 				}
 			} else {
 				w.WriteHeader(http.StatusServiceUnavailable)
 			}
 			return
 		}
-		// Deliberately verify each request for now: no readiness cache may hide
-		// partially replicated or corrupted versions. A bounded immutable
-		// readiness cache is a release performance gate, not an authorization cache.
-		manifest, err := content.VerifyVersion(filepath.Join(dataRoot, "projects", p.ID, "versions", p.ActiveDigest), p.ActiveDigest)
+		// Integrity is cached; the project authorization above is never cached.
+		manifest, err := measure(r, "verify", func() (content.Manifest, error) {
+			return content.ServingVersions.VerifyContext(ctx, filepath.Join(dataRoot, "projects", p.ID, "versions", p.ActiveDigest), p.ActiveDigest, file)
+		})
+		if ctx.Err() != nil {
+			w.WriteHeader(503)
+			return
+		}
 		if err != nil {
 			if fallback != nil && !p.Private {
-				fallback.ServeProject(w, r, p, file)
+				_, _ = measure(r, "file", func() (bool, error) { fallback.ServeProject(w, r, p, file); return true, nil })
 				return
 			}
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -158,6 +175,9 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 				w.Header().Set("Access-Control-Allow-Origin", "*")
 				w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
 			}
+			if httpcache.File(w, r, file, entry.SHA256, p.Private, branded) {
+				return
+			}
 			if branded {
 				root, err := os.OpenRoot(filepath.Join(dataRoot, "projects", p.ID, "versions", p.ActiveDigest, "public"))
 				if err != nil {
@@ -165,13 +185,13 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 					return
 				}
 				defer root.Close()
-				f, err := root.Open(file)
+				f, err := measure(r, "file", func() (*os.File, error) { return root.Open(file) })
 				if err != nil {
 					w.WriteHeader(http.StatusServiceUnavailable)
 					return
 				}
 				defer f.Close()
-				http.ServeContent(w, r, file, time.Time{}, f)
+				_, _ = measure(r, "file", func() (bool, error) { http.ServeContent(w, r, file, time.Time{}, f); return true, nil })
 				return
 			}
 			internal := prefix + p.ID + "/versions/" + p.ActiveDigest + "/public/" + file

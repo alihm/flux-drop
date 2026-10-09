@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"compress/gzip"
 	"context"
 	"errors"
 	"io"
@@ -35,7 +36,7 @@ func TestProductionNginxDelivery(t *testing.T) {
 	if os.Getenv("DROP_TEST_NGINX") != "1" {
 		t.Skip("run with tests/delivery/compose.yaml")
 	}
-	const body = "<!doctype html><h1>Flux delivery</h1>"
+	body := "<!doctype html><h1>Flux delivery</h1>" + strings.Repeat("<!-- compressible asset -->", 200)
 	s, err := content.StageHTML("/data/staging", strings.NewReader(body), content.DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +105,7 @@ func TestProductionNginxDelivery(t *testing.T) {
 		if !strings.Contains(csp, "sandbox allow-scripts;") || strings.Contains(csp, "allow-same-origin") {
 			t.Fatal("unsafe CSP", res.Header)
 		}
-		if res.Header.Get("Access-Control-Allow-Origin") != "*" || res.Header.Get("Cache-Control") != "no-store" || res.Header.Get("X-Content-Type-Options") != "nosniff" || res.Header.Get("X-Accel-Redirect") != "" {
+		if res.Header.Get("Access-Control-Allow-Origin") != "*" || res.Header.Get("Cache-Control") != "no-cache" || res.Header.Get("X-Content-Type-Options") != "nosniff" || res.Header.Get("X-Accel-Redirect") != "" {
 			t.Fatal("unsafe headers", res.Header)
 		}
 		if len(res.Header.Values("Access-Control-Allow-Origin")) != 1 {
@@ -132,12 +133,25 @@ func TestProductionNginxDelivery(t *testing.T) {
 		}
 		assertHeaders(res)
 	}
+	compressed, encoded := request("GET", path, map[string]string{"Accept-Encoding": "gzip"})
+	if compressed.StatusCode != 200 || compressed.Header.Get("Content-Encoding") != "gzip" {
+		t.Fatal("X-Accel gzip missing", compressed.StatusCode, compressed.Header)
+	}
+	gz, err := gzip.NewReader(strings.NewReader(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := io.ReadAll(gz)
+	_ = gz.Close()
+	if err != nil || string(decoded) != body {
+		t.Fatal("gzip body corrupted", err)
+	}
 	repo.Lock()
 	repo.p.WatermarkDisabled = false
 	repo.Unlock()
 	for _, method := range []string{"GET", "HEAD"} {
 		res, b := request(method, path, map[string]string{"Range": "bytes=0-3", "If-None-Match": etag})
-		if res.StatusCode != 200 || res.Header.Get("ETag") != "" || res.Header.Get("Accept-Ranges") != "none" {
+		if res.StatusCode != 200 || (res.Header.Get("ETag") == "" || res.Header.Get("ETag") == etag) || res.Header.Get("Accept-Ranges") != "none" {
 			t.Fatal("watermarked representation used source-byte validators/ranges", res.StatusCode, res.Header)
 		}
 		assertHeaders(res)
@@ -148,6 +162,24 @@ func TestProductionNginxDelivery(t *testing.T) {
 		} else if !strings.HasPrefix(b, body+`<a data-drop-watermark="runonflux"`) || strings.Count(b, `data-drop-watermark="runonflux"`) != 1 || !strings.Contains(b, `href="https://runonflux.com/apps/drop"`) {
 			t.Fatal("missing or invalid watermark", b)
 		}
+	}
+	compressed, encoded = request("GET", path, map[string]string{"Accept-Encoding": "gzip"})
+	if compressed.Header.Get("Content-Encoding") != "gzip" {
+		t.Fatal("watermarked gzip missing", compressed.Header)
+	}
+	gz, err = gzip.NewReader(strings.NewReader(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err = io.ReadAll(gz)
+	_ = gz.Close()
+	if err != nil || !strings.HasPrefix(string(decoded), body+`<a data-drop-watermark="runonflux"`) {
+		t.Fatal("watermarked gzip corrupted", err)
+	}
+	brandedTag := compressed.Header.Get("ETag")
+	conditional, conditionalBody := request("GET", path, map[string]string{"If-None-Match": brandedTag})
+	if conditional.StatusCode != 304 || conditionalBody != "" {
+		t.Fatal("watermarked revalidation failed", conditional.StatusCode, conditional.Header)
 	}
 	// Disabling the watermark restores the original representation and ETag.
 	repo.Lock()

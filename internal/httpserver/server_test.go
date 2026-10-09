@@ -45,7 +45,11 @@ func TestFoundationFailsClosed(t *testing.T) {
 		if r.Header().Get("Cross-Origin-Resource-Policy") != "same-origin" {
 			t.Fatal("management resources must reject cross-origin embedding")
 		}
-		if r.Header().Get("Cache-Control") != "no-store" || r.Header().Get("X-Content-Type-Options") != "nosniff" {
+		wantCache := "no-store"
+		if route.path == "/api/config" {
+			wantCache = "public, max-age=300"
+		}
+		if r.Header().Get("Cache-Control") != wantCache || r.Header().Get("X-Content-Type-Options") != "nosniff" {
 			t.Fatal("missing security headers")
 		}
 		if route.path == "/api/config" && !strings.Contains(r.Body.String(), `"publishingEnabled":false`) {

@@ -103,6 +103,7 @@ func NewWithDependencies(c Config, dependencies Dependencies) (http.Handler, err
 		respond(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready", "reason": "publishing_not_configured"})
 	})
 	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=300")
 		respond(w, http.StatusOK, struct {
 			PublicOrigin          string             `json:"publicOrigin"`
 			PublishingEnabled     bool               `json:"publishingEnabled"`
@@ -113,21 +114,30 @@ func NewWithDependencies(c Config, dependencies Dependencies) (http.Handler, err
 			ExploreEnabled        bool               `json:"exploreEnabled"`
 		}{PublicOrigin: c.PublicOrigin, Limits: c.Limits, PublishingEnabled: dependencies.Projects != nil, AuthenticationEnabled: dependencies.Sessions != nil, Firebase: dependencies.FirebaseWeb, ExploreEnabled: dependencies.Previews != nil, AgentAuthEnabled: dependencies.AgentAuth != nil})
 	})
+	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.WriteHeader(204)
+	})
+	var delivery http.Handler
+	if dependencies.Projects != nil {
+		delivery = ProjectDeliveryWithAccess(dependencies.Projects.Repository, dependencies.Projects.DataRoot, dependencies.Fallback, privateAccess)
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if dependencies.Projects != nil && deliverySlug.MatchString(strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")[0]) {
-			ProjectDeliveryWithAccess(dependencies.Projects.Repository, dependencies.Projects.DataRoot, dependencies.Fallback, privateAccess).ServeHTTP(w, r)
+			delivery.ServeHTTP(w, r)
 			return
 		}
 		http.NotFound(w, r)
 	})
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return observeRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		mux.ServeHTTP(w, r)
-	}), nil
+	})), nil
 }
 
 func respond(w http.ResponseWriter, status int, payload any) {

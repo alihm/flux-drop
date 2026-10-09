@@ -77,7 +77,7 @@ func LocalDelivery(app string, repository Resolver, dataRoot string) http.Handle
 			return
 		}
 		directory := filepath.Join(dataRoot, "projects", p.ID, "versions", digest)
-		manifest, err := content.VerifyVersion(directory, digest)
+		manifest, err := content.ServingVersions.VerifyContext(ctx, directory, digest, "")
 		if err != nil {
 			// An incomplete/corrupt version is not proof of global absence.
 			w.WriteHeader(http.StatusServiceUnavailable)

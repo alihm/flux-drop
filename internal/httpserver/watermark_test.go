@@ -26,7 +26,7 @@ func TestWatermarkRepresentation(t *testing.T) {
 			want := original
 			if strings.HasPrefix(kind, "text/html") {
 				want += projectWatermark
-				if rec.Header().Get("ETag") != "" || rec.Header().Get("Accept-Ranges") != "none" {
+				if rec.Header().Get("ETag") == "" || rec.Header().Get("ETag") == `"upload-hash"` || rec.Header().Get("Accept-Ranges") != "none" {
 					t.Fatal("source validators advertised", rec.Header())
 				}
 			} else if rec.Header().Get("ETag") != `"upload-hash"` {

@@ -1009,7 +1009,7 @@
     frame.loadPreview = async () => {
       if (!frame.isConnected) return;
       try {
-        const response = await fetch(src, {cache: 'no-store', credentials: 'same-origin', signal: AbortSignal.timeout(12000)});
+        const response = await fetch(src, {cache: 'default', credentials: 'same-origin', signal: AbortSignal.timeout(12000)});
         if (!frame.isConnected) return;
         if (!response.ok) { label.textContent = 'Preview unavailable'; frame.classList.remove('pending'); return; }
         if (response.headers.get('X-Drop-Preview') !== 'ready') {
@@ -1036,7 +1036,7 @@
     $('explore').hidden = false; $('explore-nav').hidden = false;
     $('explore-status').textContent = 'Finding the latest deployments…';
     try {
-      const response = await fetch('/api/explore', {cache: 'no-store'});
+      const response = await fetch('/api/explore', {cache: 'default'});
       if (!response.ok) throw new Error('Could not load deployments. Try refreshing.');
       const data = await response.json(); const cards = [];
       for (const project of (data.projects || []).slice(0, 24)) {
@@ -1223,7 +1223,7 @@
   (async () => {
     state();
     try {
-      const response = await fetch('/api/config', {cache: 'no-store'});
+      const response = await fetch('/api/config', {cache: 'default'});
       if (!response.ok) throw new Error('Service configuration is unavailable. Refresh this page to retry.');
       config = await response.json();
       if (config.exploreEnabled) $('private-help').textContent = 'Private sites need a password and stay out of Explore. Claimed public sites appear in Explore.';

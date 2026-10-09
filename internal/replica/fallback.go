@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/runonflux/flux-drop/internal/content"
+	"github.com/runonflux/flux-drop/internal/httpcache"
 	"github.com/runonflux/flux-drop/internal/project"
 )
 
@@ -174,15 +175,17 @@ func (f *Fallback) ServeProject(w http.ResponseWriter, r *http.Request, p projec
 		} else {
 			res.Body.Close()
 		}
-		// Public fallback deliberately ignores ranges/validators and returns a
-		// complete 200 response. This avoids mixing Nginx and peer ETag formats.
+		// Public fallbacks use the same manifest validators as local delivery.
+		// Byte ranges still use a complete verified response.
 		kind := mime.TypeByExtension(filepath.Ext(file))
 		if kind == "" {
 			kind = "application/octet-stream"
 		}
 		w.Header().Set("Content-Type", kind)
+		if httpcache.File(w, r, file, selected.SHA256, false, !p.WatermarkDisabled) {
+			return
+		}
 		w.Header().Set("Content-Length", strconv.FormatInt(selected.Size, 10))
-		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Security-Policy", "sandbox allow-scripts; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")

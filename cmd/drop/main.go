@@ -308,6 +308,7 @@ func run() error {
 	if publishing.enabled && publishing.password != "" {
 		handler = httpserver.StagingAccess(handler, publishing.user, publishing.password)
 	}
+	httpserver.StartDebugListener(ctx)
 	server := &http.Server{Addr: "127.0.0.1:8081", Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 330 * time.Second, WriteTimeout: 10 * time.Minute, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	defer server.Close()
 	if maintenance != nil {

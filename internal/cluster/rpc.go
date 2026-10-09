@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -19,6 +20,7 @@ import (
 const metadataPath = "/_drop_cluster/metadata"
 
 type rpcRequest struct {
+	Stamp       *readStamp   `json:"stamp,omitempty"`
 	Prefix      string       `json:"prefix,omitempty"`
 	Cursor      string       `json:"cursor,omitempty"`
 	Limit       int          `json:"limit,omitempty"`
@@ -28,6 +30,7 @@ type rpcRequest struct {
 	Transaction *Transaction `json:"transaction,omitempty"`
 }
 type rpcResponse struct {
+	Stamp   *readStamp        `json:"stamp,omitempty"`
 	Next    string            `json:"next,omitempty"`
 	Records map[string]Record `json:"records,omitempty"`
 	Error   string            `json:"error,omitempty"`
@@ -79,7 +82,17 @@ func (n *Node) rpcHandler(w http.ResponseWriter, r *http.Request, app string) {
 		http.Error(w, "invalid command", 400)
 		return
 	}
+	if request.Stamp != nil && request.Method != "snapshot_read" {
+		http.Error(w, "invalid command", 400)
+		return
+	}
 	switch request.Method {
+	case "snapshot_read":
+		if request.Transaction != nil || len(request.Checks) != 0 {
+			err = ErrInvalid
+		} else {
+			response.Records, response.Stamp, err = n.readSnapshot(r.Context(), request.Keys, request.Stamp)
+		}
 	case "scan":
 		if request.Transaction != nil || len(request.Keys) != 0 || len(request.Checks) != 0 {
 			err = ErrInvalid
@@ -111,6 +124,8 @@ func (n *Node) rpcHandler(w http.ResponseWriter, r *http.Request, app string) {
 	}
 	switch {
 	case err == nil:
+	case errors.Is(err, ErrNotLeader):
+		response.Error = "not_leader"
 	case errors.Is(err, ErrConflict):
 		response.Error = "conflict"
 	case errors.Is(err, ErrInvalid):
@@ -127,6 +142,10 @@ func (n *Node) rpcHandler(w http.ResponseWriter, r *http.Request, app string) {
 // leader hint. There are no HTTP redirects, environment proxies or blind write
 // retries after timeouts/leadership changes.
 type Client struct {
+	mu                 sync.Mutex
+	peers              map[string]*http.Client
+	leaderAddress      netip.AddrPort
+	leaderID           string
 	http               *http.Client
 	local              netip.AddrPort
 	id, app, clusterID string
@@ -156,7 +175,14 @@ func NewClient(c RuntimeConfig) (*Client, error) {
 	}
 	return &Client{http: h, local: address, id: c.Local.ID, app: c.App, clusterID: c.ClusterID, statusPort: c.StatusPort}, nil
 }
-func (c *Client) Close() { c.http.CloseIdleConnections() }
+func (c *Client) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.http.CloseIdleConnections()
+	for _, peer := range c.peers {
+		peer.CloseIdleConnections()
+	}
+}
 func (c *Client) call(ctx context.Context, request rpcRequest) (rpcResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -165,6 +191,11 @@ func (c *Client) call(ctx context.Context, request rpcRequest) (rpcResponse, err
 		return rpcResponse{}, ErrInvalid
 	}
 	address, id := c.local, c.id
+	c.mu.Lock()
+	if c.leaderID != "" {
+		address, id = c.leaderAddress, c.leaderID
+	}
+	c.mu.Unlock()
 	for hop := 0; hop < 2; hop++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+address.String()+metadataPath, bytes.NewReader(data))
 		if err != nil {
@@ -172,30 +203,16 @@ func (c *Client) call(ctx context.Context, request rpcRequest) (rpcResponse, err
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Drop-Cluster", c.clusterID)
-		// Pin before sending metadata, not merely when inspecting the response.
-		transport := c.http.Transport.(*http.Transport).Clone()
-		transport.TLSClientConfig = transport.TLSClientConfig.Clone()
-		verify := transport.TLSClientConfig.VerifyConnection
-		expectedID := id
-		transport.TLSClientConfig.VerifyConnection = func(state tls.ConnectionState) error {
-			if err := verify(state); err != nil {
-				return err
-			}
-			if replica.PeerIdentity(state.PeerCertificates[0], c.app) != expectedID {
-				return errors.New("metadata destination identity mismatch")
-			}
-			return nil
-		}
-		httpClient := *c.http
-		httpClient.Transport = transport
+		httpClient := c.peerClient(address, id)
 		response, err := httpClient.Do(req)
 		if err != nil {
-			transport.CloseIdleConnections()
+			c.mu.Lock()
+			c.leaderID = ""
+			c.mu.Unlock()
 			return rpcResponse{}, err
 		}
 		body, readErr := io.ReadAll(io.LimitReader(response.Body, 9<<20))
 		response.Body.Close()
-		transport.CloseIdleConnections()
 		if readErr != nil || len(body) >= 9<<20 || response.StatusCode != 200 || response.TLS == nil || len(response.TLS.VerifiedChains) == 0 || len(response.TLS.PeerCertificates) == 0 || replica.PeerIdentity(response.TLS.PeerCertificates[0], c.app) != id {
 			return rpcResponse{}, errors.New("untrusted or unavailable metadata response")
 		}
@@ -205,6 +222,9 @@ func (c *Client) call(ctx context.Context, request rpcRequest) (rpcResponse, err
 		}
 		switch result.Error {
 		case "":
+			c.mu.Lock()
+			c.leaderAddress, c.leaderID = address, id
+			c.mu.Unlock()
 			return result, nil
 		case "conflict":
 			return result, ErrConflict
@@ -213,6 +233,13 @@ func (c *Client) call(ctx context.Context, request rpcRequest) (rpcResponse, err
 		case "capacity":
 			return result, ErrCapacity
 		case "not_leader":
+			c.mu.Lock()
+			c.leaderID = ""
+			c.mu.Unlock()
+			if hop == 0 && result.Leader == nil && address != c.local {
+				address, id = c.local, c.id
+				continue
+			}
 			if hop != 0 || result.Leader == nil || result.Leader.validate() != nil {
 				return result, ErrNotLeader
 			}
@@ -220,6 +247,9 @@ func (c *Client) call(ctx context.Context, request rpcRequest) (rpcResponse, err
 			address = netip.AddrPortFrom(ip.Addr(), c.statusPort)
 			id = result.Leader.ID
 		default:
+			c.mu.Lock()
+			c.leaderID = ""
+			c.mu.Unlock()
 			return result, errors.New("metadata operation outcome unavailable")
 		}
 	}
@@ -241,4 +271,44 @@ func (c *Client) Commit(ctx context.Context, t Transaction) error {
 func (c *Client) Scan(ctx context.Context, prefix, cursor string, limit int) (kv.Page, error) {
 	r, e := c.call(ctx, rpcRequest{Method: "scan", Prefix: prefix, Cursor: cursor, Limit: limit})
 	return kv.Page{Records: r.Records, Next: r.Next}, e
+}
+
+// Pool by both destination and verified identity. TLS pinning remains checked
+// before sending records; a certificate for another member cannot receive data.
+func (c *Client) peerClient(address netip.AddrPort, id string) *http.Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.peers == nil {
+		c.peers = map[string]*http.Client{}
+	}
+	key := address.String() + "/" + id
+	if client := c.peers[key]; client != nil {
+		return client
+	}
+	transport := c.http.Transport.(*http.Transport).Clone()
+	transport.TLSClientConfig = transport.TLSClientConfig.Clone()
+	verify := transport.TLSClientConfig.VerifyConnection
+	transport.TLSClientConfig.VerifyConnection = func(state tls.ConnectionState) error {
+		if err := verify(state); err != nil {
+			return err
+		}
+		if replica.PeerIdentity(state.PeerCertificates[0], c.app) != id {
+			return errors.New("metadata destination identity mismatch")
+		}
+		return nil
+	}
+	transport.MaxIdleConnsPerHost = 50
+	transport.MaxConnsPerHost = 64
+	client := *c.http
+	client.Transport = transport
+	// Membership churn cannot grow the connection pool without bound.
+	if len(c.peers) >= 32 {
+		for key, old := range c.peers {
+			old.CloseIdleConnections()
+			delete(c.peers, key)
+			break
+		}
+	}
+	c.peers[key] = &client
+	return &client
 }

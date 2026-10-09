@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/runonflux/flux-drop/internal/httpcache"
 )
 
 // Presentation only: no script, external resource, or sandbox permission needed.
@@ -22,6 +24,7 @@ func htmlFile(name string) bool {
 // Branded HTML is always a complete representation. Ignore source-file ranges
 // and validators, which describe the immutable upload rather than this response.
 func watermarkRequest(r *http.Request) *http.Request {
+	r = httpcache.WithOriginal(r)
 	r = r.Clone(r.Context())
 	for _, key := range []string{"Range", "If-Range", "If-Match", "If-None-Match", "If-Modified-Since", "If-Unmodified-Since"} {
 		r.Header.Del(key)
@@ -55,7 +58,9 @@ func (w *watermarkWriter) WriteHeader(status int) {
 		} else {
 			w.Header().Del("Content-Length")
 		}
-		w.Header().Del("ETag")
+		if tag := w.Header().Get("ETag"); tag != "" && !strings.HasSuffix(tag, `-w"`) {
+			w.Header().Set("ETag", httpcache.ETag(strings.Trim(tag, `"`), true))
+		}
 		w.Header().Del("Last-Modified")
 		w.Header().Set("Accept-Ranges", "none")
 	}

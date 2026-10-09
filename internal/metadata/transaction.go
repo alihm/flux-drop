@@ -110,7 +110,11 @@ func (s *Store) run(ctx context.Context, durability kv.Durability, fn func(*Tx) 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	for attempt := 0; attempt < 8; attempt++ {
-		tx := &Tx{ctx: ctx, backend: s.Backend, reads: make(map[string]kv.Record), writes: make(map[string]kv.Write), durability: durability}
+		backend := s.Backend
+		if factory, ok := backend.(interface{ TransactionBackend() Backend }); ok {
+			backend = factory.TransactionBackend()
+		}
+		tx := &Tx{ctx: ctx, backend: backend, reads: make(map[string]kv.Record), writes: make(map[string]kv.Write), durability: durability}
 		err := fn(tx)
 		if err == nil {
 			err = tx.finish()

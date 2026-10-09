@@ -1,6 +1,7 @@
 package content
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -23,6 +24,13 @@ var markerRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,111}[a-z0-9])?$`)
 // missing files, malformed manifests and noncanonical file ordering. Replicas
 // must run this before treating a newly replicated version as ready.
 func VerifyVersion(directory, digest string) (Manifest, error) {
+	return VerifyVersionContext(context.Background(), directory, digest)
+}
+
+func VerifyVersionContext(ctx context.Context, directory, digest string) (Manifest, error) {
+	if err := ctx.Err(); err != nil {
+		return Manifest{}, err
+	}
 	if !versionDigestRE.MatchString(digest) {
 		return Manifest{}, ErrInvalid
 	}
@@ -60,6 +68,9 @@ func VerifyVersion(directory, digest string) (Manifest, error) {
 	}
 	seen := 0
 	err = fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			return walkErr
 		}
@@ -91,7 +102,7 @@ func VerifyVersion(directory, digest string) (Manifest, error) {
 			return err
 		}
 		hash := sha256.New()
-		n, copyErr := io.Copy(hash, io.LimitReader(file, item.Size+1))
+		n, copyErr := io.Copy(hash, io.LimitReader(versionReader{ctx, file}, item.Size+1))
 		closeErr := file.Close()
 		if copyErr != nil {
 			return copyErr
@@ -377,4 +388,17 @@ func SyncVersion(directory, digest string) error {
 		}
 	}
 	return nil
+}
+
+// Check cancellation between hash chunks; serving must respect its 10s budget.
+type versionReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r versionReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }
