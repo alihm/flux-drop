@@ -43,6 +43,9 @@ func NewWithDependencies(c Config, dependencies Dependencies) (http.Handler, err
 		return nil, fmt.Errorf("session storage and identity verifier must both be configured")
 	}
 	mux := http.NewServeMux()
+	if dependencies.AgentAuth != nil {
+		dependencies.AgentAuth.register(mux)
+	}
 	if dependencies.Admin != nil {
 		mux.Handle("/admin", dependencies.Admin)
 		mux.Handle("/admin/", dependencies.Admin)
@@ -92,8 +95,9 @@ func NewWithDependencies(c Config, dependencies Dependencies) (http.Handler, err
 			AuthenticationEnabled bool               `json:"authenticationEnabled"`
 			Limits                content.Limits     `json:"limits"`
 			Firebase              *FirebaseWebConfig `json:"firebase,omitempty"`
+			AgentAuthEnabled      bool               `json:"agentAuthEnabled"`
 			ExploreEnabled        bool               `json:"exploreEnabled"`
-		}{PublicOrigin: c.PublicOrigin, Limits: c.Limits, PublishingEnabled: dependencies.Projects != nil, AuthenticationEnabled: dependencies.Sessions != nil, Firebase: dependencies.FirebaseWeb, ExploreEnabled: dependencies.Previews != nil})
+		}{PublicOrigin: c.PublicOrigin, Limits: c.Limits, PublishingEnabled: dependencies.Projects != nil, AuthenticationEnabled: dependencies.Sessions != nil, Firebase: dependencies.FirebaseWeb, ExploreEnabled: dependencies.Previews != nil, AgentAuthEnabled: dependencies.AgentAuth != nil})
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if dependencies.Projects != nil && deliverySlug.MatchString(strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")[0]) {

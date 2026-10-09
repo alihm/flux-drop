@@ -155,6 +155,16 @@ func run() error {
 			raftProjects.StorageOffers = storage.Offers
 			dependencies.StorageStatus = storage.AdminHandlerWithOperations(store)
 		}
+		agentConfig, err := httpserver.AgentAuthFromEnv(get)
+		if err != nil {
+			return err
+		}
+		if webConfig != nil {
+			dependencies.AgentAuth, err = httpserver.NewAgentAuth(context.Background(), agentConfig, get("DROP_PUBLIC_ORIGIN"), get("DROP_CLUSTER_PASSPHRASE"), raftProjects, webConfig)
+			if err != nil {
+				return err
+			}
+		}
 		projects = raftProjects
 		if maintenanceEnabled == "true" {
 			maintenance = raftProjects
@@ -222,6 +232,26 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if dependencies.AgentAuth != nil {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			cursors := map[string]string{}
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := dependencies.AgentAuth.Repository.MaintainAgents(ctx, cursors); err != nil && ctx.Err() == nil {
+						slog.Warn("agent metadata cleanup unavailable")
+					}
+				}
+			}
+		}()
+		defer func() { stop(); <-done }()
+	}
 	var peerErrors <-chan error
 	if storage != nil {
 		dependencies.Fallback = storage

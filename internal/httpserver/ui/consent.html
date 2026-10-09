@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Connect your agent · Flux Drop</title><style>{{.CSS}}</style></head>
+<body class="consent-body"><main class="consent-shell"><a class="consent-brand" href="/" aria-label="Flux Drop home">FLUX <span>DROP</span></a>
+{{if .Error}}<section class="consent-card"><h1>Unable to connect</h1><p role="alert">{{.Error}}</p><p>Return to your agent and start a new connection.</p></section>{{else}}
+<section id="consent" class="consent-card" data-firebase="{{.Firebase}}" data-handle="{{.Handle}}" data-csrf="{{.CSRF}}">
+<p class="kicker">Connect an agent</p><h1>Allow {{.Name}} to use Flux?</h1>
+{{if .Domain}}<p class="consent-domain">Verified client domain: <strong>{{.Domain}}</strong></p>{{else}}<p class="consent-warning">This app named itself; the name is not verified.</p>{{end}}
+<p>Returning to <strong>{{.RedirectHost}}</strong>.</p>{{if .Loopback}}<p class="consent-warning">An app on this computer; continue only if you just started connecting from your agent.</p>{{end}}
+<div class="consent-permissions"><h2>What this agent can do</h2><ul>
+{{if .Orbit}}<li><strong>Orbit:</strong> inspect repositories, list apps and logs, deploy, control instances, change settings, and renew apps.</li>{{end}}
+{{if .Drop}}<li><strong>Drop:</strong> list, publish, replace, rename, change privacy, and delete projects after asking.</li>{{end}}
+</ul><p>It cannot pay for anything or see your password.</p></div>
+<div id="consent-login"><button type="button" id="consent-google" class="secondary">Continue with Google</button><p class="consent-divider">or sign in with email</p>
+<form id="consent-email-form"><label for="consent-email">Email</label><input id="consent-email" type="email" autocomplete="username" required maxlength="254"><label for="consent-password">Password</label><input id="consent-password" type="password" autocomplete="current-password" required maxlength="1024"><button id="consent-email-submit" type="submit">Sign in</button></form><button id="consent-reset" class="consent-link" type="button">Reset password</button></div>
+<div id="consent-account" hidden><p id="consent-user"></p><button id="consent-switch" class="consent-link" type="button">Use another account</button></div><p id="consent-status" role="status" aria-live="polite"></p>
+<div class="consent-actions"><button id="consent-deny" class="secondary" type="button">Deny</button><button id="consent-allow" type="button" disabled>Allow</button></div>
+<p class="consent-footnote">Disconnect this agent at any time from your Flux Drop account.</p></section>{{end}}</main><script>{{.JS}}</script></body></html>

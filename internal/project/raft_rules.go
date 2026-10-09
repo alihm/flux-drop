@@ -29,7 +29,7 @@ func (s *RaftRepository) limit(o Owner) int64 {
 }
 
 func (s *RaftRepository) authorize(tx *raftTx, a Actor) error {
-	if a.AgentKeyDigest != "" {
+	if a.AgentKeyDigest != "" || a.UploadTicketDigest != "" {
 		return session.ErrUnauthorized
 	}
 	if !digestRE.MatchString(a.SessionDigest) || a.AnonymousID == "" {
@@ -52,6 +52,9 @@ func (s *RaftRepository) authorize(tx *raftTx, a Actor) error {
 }
 
 func (s *RaftRepository) authorizePublish(tx *raftTx, a Actor) error {
+	if a.UploadTicketDigest != "" {
+		return s.authorizeUploadTicket(tx, a)
+	}
 	if a.AgentKeyDigest == "" {
 		return s.authorize(tx, a)
 	}
@@ -87,6 +90,15 @@ func (s *RaftRepository) Reserve(ctx context.Context, a Actor, r Reservation) (P
 	err := s.runContent(ctx, func(ctx context.Context, tx *raftTx) error {
 		if err := s.authorizePublish(tx, a); err != nil {
 			return err
+		}
+		if a.UploadTicketDigest != "" {
+			ticket, err := raftRead[AgentUploadTicket](tx, "agent_upload_tickets/"+a.UploadTicketDigest)
+			if err != nil {
+				return err
+			}
+			if ticket.ProjectID != r.ProjectID || ticket.Name != r.Name || ticket.Revision != r.ExpectedRevision || r.Key != a.UploadTicketDigest {
+				return ErrForbidden
+			}
 		}
 		op, err := raftRead[Operation](tx, s.raftRef("operations", opID))
 		if err == nil {
@@ -315,6 +327,19 @@ func (s *RaftRepository) activate(ctx context.Context, a Actor, opID, passwordDi
 		p.Revision++
 		op.State = "complete"
 		p.UpdatedAt = s.now()
+		if a.UploadTicketDigest != "" {
+			ticket, err := raftRead[AgentUploadTicket](tx, "agent_upload_tickets/"+a.UploadTicketDigest)
+			if err != nil {
+				return err
+			}
+			ticket.Result = &p
+			ticket.Password = nil
+			ticket.Lease = ""
+			ticket.LeaseUntil = time.Time{}
+			if err := tx.Set("agent_upload_tickets/"+a.UploadTicketDigest, ticket); err != nil {
+				return err
+			}
+		}
 		if err := tx.Set(s.raftRef("operations", opID), op); err != nil {
 			return err
 		}

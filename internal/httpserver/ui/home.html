@@ -104,6 +104,7 @@
         <div class="agent-key-create"><label for="agent-key-label">Key label</label><input id="agent-key-label" type="text" maxlength="64" placeholder="e.g. My coding agent" autocomplete="off"><button id="create-agent-key" type="button">Create key</button></div>
         <div id="agent-key-secret" class="agent-key-secret" hidden><p>Copy this key now. It will not be shown again.</p><input id="agent-key-value" type="text" readonly aria-label="New API key"><button id="copy-agent-key" type="button" class="secondary">Copy key</button></div>
         <p id="agent-key-status" role="status" aria-live="polite"></p><div id="agent-key-list" class="agent-key-list"></div>
+        <div id="agent-connections" hidden><h3>Connected agents</h3><p>Agents connected through browser sign-in. Disconnect to remove their access immediately.</p><button id="load-agent-connections" type="button" class="secondary">View connections</button><p id="agent-connections-status" role="status" aria-live="polite"></p><div id="agent-connections-list" class="agent-key-list"></div></div>
       </section>
 
       <section id="explore" class="band explore" aria-labelledby="explore-heading" hidden>

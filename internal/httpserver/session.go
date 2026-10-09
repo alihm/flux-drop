@@ -26,6 +26,7 @@ type Dependencies struct {
 	StorageStatus http.Handler
 	Admin         http.Handler
 	Previews      *preview.Service
+	AgentAuth     *AgentAuth
 }
 
 func registerSessions(mux *http.ServeMux, origin string, service *session.Service) {

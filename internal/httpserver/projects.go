@@ -99,7 +99,13 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 				return
 			}
 			if update {
-				if _, err := deps.Projects.Repository.GetOwned(r.Context(), a, request.ProjectID); err != nil {
+				var ownershipErr error
+				if a.UploadTicketDigest != "" && deps.AgentAuth != nil {
+					_, ownershipErr = deps.AgentAuth.Repository.GetAgentUploadProject(r.Context(), a, request.ProjectID)
+				} else {
+					_, ownershipErr = deps.Projects.Repository.GetOwned(r.Context(), a, request.ProjectID)
+				}
+				if err := ownershipErr; err != nil {
 					projectError(w, err)
 					return
 				}
@@ -147,8 +153,18 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 				projectError(w, err)
 				return
 			}
+			if a.UploadTicketDigest != "" && deps.AgentAuth != nil {
+				if deps.Previews != nil {
+					deps.Previews.Notify(result)
+				}
+				deps.AgentAuth.uploadResult(w, result)
+				return
+			}
 			respondProject(w, result)
 		}
+	}
+	if deps.AgentAuth != nil {
+		deps.AgentAuth.registerUpload(mux, upload)
 	}
 	mux.Handle("POST /api/projects", mutate(upload(false, actor)))
 	mux.Handle("POST /api/projects/{id}/versions", mutate(upload(true, actor)))

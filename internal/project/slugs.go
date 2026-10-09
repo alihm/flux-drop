@@ -17,7 +17,7 @@ func chooseSlug(name, seed, id string, lookup func(string) (string, error)) (str
 			return "", "", ErrInvalid
 		}
 		switch slug {
-		case "api", "admin", "agents", "unlock", "healthz", "readyz":
+		case "api", "admin", "agents", "agent", "oauth", "unlock", "healthz", "readyz":
 			continue
 		}
 		owner, err := lookup(slug)

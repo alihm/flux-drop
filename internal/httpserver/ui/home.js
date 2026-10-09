@@ -264,7 +264,7 @@
     $('sign-out').disabled = authenticating || !session;
     $('continue-google').disabled = authenticating || !session;
     $('close-sign-in').disabled = authenticating;
-    if (!session?.authenticated) { $('agent-keys').hidden = true; $('agent-key-secret').hidden = true; $('agent-key-value').value = ''; }
+    if (!session?.authenticated) { $('agent-connections').hidden = true; $('agent-connections-list').replaceChildren(); $('agent-keys').hidden = true; $('agent-key-secret').hidden = true; $('agent-key-value').value = ''; }
   }
 
   async function loadAgentKeys() {
@@ -290,9 +290,56 @@
         list.append(row);
       }
       if (!data.keys?.length) note(list, 'No active API keys. Create one to publish from an agent.');
-      $('agent-keys').hidden = false;
+      $('agent-keys').hidden = false; $('agent-connections').hidden = !config?.agentAuthEnabled;
+      if (window.DropAuth?.current?.()) await loadAgentConnections(false);
     } catch { $('agent-key-status').textContent = 'Could not load API keys. Refresh to retry.'; }
   }
+
+  async function agentConnectionToken(prompt) {
+    if (!window.DropAuth?.current?.()) {
+      if (!prompt) return null;
+      await window.DropAuth.google();
+    }
+    const credentials = await window.DropAuth.credentials();
+    if (credentials.uid !== session?.user?.uid) {
+      await window.DropAuth.clear();
+      throw new Error('Sign in with the same Google account used for this Drop session.');
+    }
+    return credentials.idToken;
+  }
+  async function loadAgentConnections(prompt = true) {
+    if (!session?.authenticated || !config?.agentAuthEnabled) return;
+    const status = $('agent-connections-status');
+    try {
+      const token = await agentConnectionToken(prompt);
+      if (!token) return;
+      const response = await fetch('/api/agent-grants', {credentials: 'omit', cache: 'no-store', headers: {Authorization: 'Bearer ' + token}});
+      if (!response.ok) throw new Error('Could not load connected agents. Try again.');
+      const data = await response.json();
+      const list = $('agent-connections-list'); list.replaceChildren();
+      for (const agent of data.agents || []) {
+        const row = document.createElement('div'); row.className = 'agent-key-row';
+        const details = document.createElement('div');
+        const label = document.createElement('strong'); label.textContent = agent.name;
+        const domain = document.createElement('span'); domain.textContent = agent.domain ? agent.domain : 'Client name is not verified';
+        const usage = document.createElement('span'); usage.textContent = agent.scope.join(', ') + ' · Connected ' + dateLabel(agent.connectedAt) + (agent.lastUsedAt && !agent.lastUsedAt.startsWith('0001-') ? ' · Last used ' + dateLabel(agent.lastUsedAt) : '');
+        details.append(label, domain, usage); row.append(details);
+        addButton(row, 'Disconnect', 'secondary', async () => {
+          if (!window.confirm('Disconnect this agent? Its access will be revoked immediately.')) return;
+          try {
+            const idToken = await agentConnectionToken(true);
+            const result = await fetch('/api/agent-grants/' + encodeURIComponent(agent.id), {method: 'DELETE', credentials: 'omit', headers: {Authorization: 'Bearer ' + idToken}});
+            if (!result.ok) throw new Error('Could not disconnect the agent. Try again.');
+            status.textContent = 'Agent disconnected.'; await loadAgentConnections(false);
+          } catch (error) { status.textContent = error.message; }
+        });
+        list.append(row);
+      }
+      if (!data.agents?.length) note(list, 'No connected agents.');
+      status.textContent = '';
+    } catch (error) { status.textContent = error.message; }
+  }
+  $('load-agent-connections').onclick = () => loadAgentConnections(true);
 
   $('create-agent-key').onclick = async () => {
     const label = $('agent-key-label').value.trim();
@@ -734,7 +781,8 @@
     $('auth-status').textContent = window.DropAuth.preview ? 'Signing in to the local UI demo…' : 'Complete sign-in in the Google window.';
     try {
       // Open the popup in the click handler's user gesture, before any network await.
-      const idToken = await window.DropAuth.token();
+      let idToken;
+      if (window.DropAuth.google) { await window.DropAuth.google(); idToken = (await window.DropAuth.credentials()).idToken; } else { idToken = await window.DropAuth.token(); }
       await exchange('/api/auth/google', {idToken});
       $('auth-status').textContent = 'Signed in. Claimed sites stay available across devices.';
       if (refresh) await listProjects();

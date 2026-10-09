@@ -36,10 +36,11 @@ type Owner struct {
 // Actor is constructed from a verified session, never decoded from HTTP input.
 // Mutations re-read that session inside the authoritative metadata transaction.
 type Actor struct {
-	SessionDigest  string
-	AnonymousID    string
-	UID            string
-	AgentKeyDigest string
+	SessionDigest      string
+	AnonymousID        string
+	UID                string
+	AgentKeyDigest     string
+	UploadTicketDigest string
 }
 
 func ActorFrom(token string, view session.View) (Actor, error) {
