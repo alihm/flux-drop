@@ -17,9 +17,8 @@ var agentUI embed.FS
 
 func (a *AgentAuth) consentPage(w http.ResponseWriter, status int, p project.AgentPending, handle, csrf, message string) {
 	html, _ := agentUI.ReadFile("ui/consent.html")
-	css, _ := homeUI.ReadFile("ui/home.css")
-	extra, _ := agentUI.ReadFile("ui/consent.css")
-	css = append(append(css, '\n'), extra...)
+	// The consent page carries its own dark theme; home.css follows the system theme and would fight it.
+	css, _ := agentUI.ReadFile("ui/consent.css")
 	bundle, _ := homeUI.ReadFile("ui/auth.bundle.js")
 	js, _ := agentUI.ReadFile("ui/consent.js")
 	js = append(append(bundle, '\n'), js...)
