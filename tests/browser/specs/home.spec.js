@@ -88,6 +88,7 @@ test('dragging a folder keeps nested paths across directory-reader batches',asyn
     await route.fulfill({json:{path:'/dropped-abcdef/',project:{id:'a'.repeat(32),expiresAt:'2026-10-22T00:00:00Z'}}});
   });
   await page.goto('/');
+  await expect(page.locator('#status')).toContainText('Choose a site');
   await page.locator('#dropzone').evaluate(zone=>{
     const file=(name,body)=>({name,isFile:true,file(done){done(new File([body],name));}});
     const dir=(name,batches)=>({name,isDirectory:true,createReader(){let index=0;return {readEntries(done){done(batches[index++]||[]);}};}});
@@ -99,7 +100,9 @@ test('dragging a folder keeps nested paths across directory-reader batches',asyn
   });
   await expect(page.locator('#selection')).toContainText('2 files');
   await expect(page.locator('#selected-files')).toContainText('site/assets/style.css');
-  await page.getByRole('button',{name:'Publish site'}).click();
+  // Dropping starts a smooth scroll. Use normal keyboard activation so this
+  // directory-reader test does not race Firefox's scrolling pointer position.
+  await page.getByRole('button',{name:'Publish site'}).press('Enter');
   await expect(page.locator('#project-link')).toHaveAttribute('href','/dropped-abcdef/');
   await expect(page.locator('#claim-callout')).toBeVisible();
 });

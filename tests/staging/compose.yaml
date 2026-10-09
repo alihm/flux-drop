@@ -27,9 +27,12 @@ services:
     ports: ["127.0.0.1:18088:8080"]
     read_only: true
     tmpfs: [/tmp]
-    volumes: [staging-data:/data]
+    volumes:
+      - staging-data:/data
+      - staging-state:/var/lib/drop-cluster
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     stop_grace_period: 25s
 volumes:
   staging-data:
+  staging-state:

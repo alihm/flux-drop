@@ -31,6 +31,10 @@ async function ready(){
   for(let i=0;i<90;i++){try{if((await fetch(base+'/readyz',{signal:AbortSignal.timeout(1000)})).status===200)return}catch{};await new Promise(r=>setTimeout(r,1000))}
   throw Error('staging container did not become ready');
 }
+function contentWithoutWatermark(body){
+  assert.match(body,/<a data-drop-watermark="runonflux"[^>]+href="https:\/\/runonflux.com\/apps\/drop"/);
+  return body.replace(/<a data-drop-watermark="runonflux"[^>]*>[\s\S]*?<\/a>/,'');
+}
 await ready();
 await call('/api/config',{anonymous:true,status:401});
 assert.equal((await call('/api/config')).data.publishingEnabled,true);
@@ -40,12 +44,12 @@ const key=randomUUID();
 const html='<h1>Final image integration '+key+'</h1>';
 let p=(await call('/api/projects?name=staging',{method:'POST',body:html,headers:{'Content-Type':'text/html','Idempotency-Key':key}})).data.project;
 const path='/'+p.slug+'/';
-let served=await call(path,{anonymous:true});assert.equal(served.data,html);assert.match(served.r.headers.get('content-security-policy'),/sandbox allow-scripts/);assert.doesNotMatch(served.r.headers.get('content-security-policy'),/allow-same-origin/);
+let served=await call(path,{anonymous:true});assert.equal(contentWithoutWatermark(served.data),html);assert.match(served.r.headers.get('content-security-policy'),/sandbox allow-scripts/);assert.doesNotMatch(served.r.headers.get('content-security-policy'),/allow-same-origin/);
 await call('/api/projects/'+p.id,{method:'DELETE',headers:{Origin:'null','If-Match':`"${p.revision}"`},status:403});
 const duplicate=await call('/api/projects?name=duplicate',{method:'POST',body:html,headers:{'Content-Type':'text/html','Idempotency-Key':randomUUID()},status:409});assert.equal(duplicate.data.path,path);
 const revised=html+'updated';
 p=(await call('/api/projects/'+p.id+'/versions',{method:'POST',body:revised,headers:{'Content-Type':'text/html','Idempotency-Key':randomUUID(),'If-Match':`"${p.revision}"`}})).data.project;
-assert.equal('/'+p.slug+'/',path);assert.equal((await call(path,{anonymous:true})).data,revised);
+assert.equal('/'+p.slug+'/',path);assert.equal(contentWithoutWatermark((await call(path,{anonymous:true})).data),revised);
 p=(await call('/api/projects/'+p.id,{method:'PATCH',body:{name:'renamed'},headers:{'If-Match':`"${p.revision}"`}})).data.project;
 await call(path,{anonymous:true,status:307});
 const current='/'+p.slug+'/';
@@ -60,11 +64,11 @@ p=(await call('/api/projects/'+p.id+'/privacy',{method:'PUT',body:{private:true,
 await call(current,{anonymous:true,status:404});
 await call(current,{headers:{'Sec-Fetch-Mode':'navigate','Sec-Fetch-Dest':'document'},status:303});
 await call('/api/unlock',{method:'POST',body:{slug:p.slug,password:'a very long staging password'}});
-assert.equal((await call(current,{headers:{'Sec-Fetch-Mode':'navigate','Sec-Fetch-Dest':'document'}})).data,revised);
+assert.equal(contentWithoutWatermark((await call(current,{headers:{'Sec-Fetch-Mode':'navigate','Sec-Fetch-Dest':'document'}})).data),revised);
 await call(current,{status:404});
 p=(await call('/api/projects/'+p.id+'/privacy',{method:'PUT',body:{private:false},headers:{'If-Match':`"${p.revision}"`}})).data.project;
 execFileSync('docker',['compose','-f','tests/staging/compose.yaml','restart','drop'],{stdio:'inherit'});
-await ready();assert.equal((await call(current,{anonymous:true})).data,revised);
+await ready();assert.equal(contentWithoutWatermark((await call(current,{anonymous:true})).data),revised);
 assert.equal((await call('/api/projects/'+p.id)).data.project.id,p.id);
 await call('/api/projects/'+p.id,{method:'DELETE',headers:{'If-Match':`"${p.revision}"`},status:204});
 await call(current,{anonymous:true,status:404});

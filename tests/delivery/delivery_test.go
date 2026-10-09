@@ -40,7 +40,9 @@ func TestProductionNginxDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := project.Project{ID: strings.Repeat("a", 32), Slug: "test-" + s.Digest[:6], ActiveDigest: s.Digest, Status: "active"}
+	// Keep byte/range/cache checks for the unmodified representation, and test
+	// the default watermarked representation separately below.
+	p := project.Project{ID: strings.Repeat("a", 32), Slug: "test-" + s.Digest[:6], ActiveDigest: s.Digest, Status: "active", WatermarkDisabled: true}
 	if err := s.Install("/data", p.ID, p.Slug); err != nil {
 		t.Fatal(err)
 	}
@@ -129,6 +131,31 @@ func TestProductionNginxDelivery(t *testing.T) {
 			t.Fatalf("conditional delivery: %d %q", res.StatusCode, b)
 		}
 		assertHeaders(res)
+	}
+	repo.Lock()
+	repo.p.WatermarkDisabled = false
+	repo.Unlock()
+	for _, method := range []string{"GET", "HEAD"} {
+		res, b := request(method, path, map[string]string{"Range": "bytes=0-3", "If-None-Match": etag})
+		if res.StatusCode != 200 || res.Header.Get("ETag") != "" || res.Header.Get("Accept-Ranges") != "none" {
+			t.Fatal("watermarked representation used source-byte validators/ranges", res.StatusCode, res.Header)
+		}
+		assertHeaders(res)
+		if method == "HEAD" {
+			if b != "" {
+				t.Fatal("watermarked HEAD returned a body", b)
+			}
+		} else if !strings.HasPrefix(b, body+`<a data-drop-watermark="runonflux"`) || strings.Count(b, `data-drop-watermark="runonflux"`) != 1 || !strings.Contains(b, `href="https://runonflux.com/apps/drop"`) {
+			t.Fatal("missing or invalid watermark", b)
+		}
+	}
+	// Disabling the watermark restores the original representation and ETag.
+	repo.Lock()
+	repo.p = p
+	repo.Unlock()
+	res, b = request("GET", path, nil)
+	if res.StatusCode != 200 || b != body || res.Header.Get("ETag") != etag {
+		t.Fatal("disabling watermark did not restore source representation", res.StatusCode, res.Header, b)
 	}
 	for _, bad := range []string{"/_drop_internal/files/" + p.ID + "/versions/" + p.ActiveDigest + "/public/index.html", path + "manifest.json", path + "%2e%2e/manifest.json", path + "%69ndex.html", path + "hash"} {
 		res, _ := request("GET", bad, map[string]string{"X-Drop-Peer": "spoofed"})
