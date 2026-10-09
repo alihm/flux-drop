@@ -62,6 +62,12 @@ func read[T any](tx *firestore.Transaction, ref *firestore.DocumentRef) (T, erro
 	return value, err
 }
 func (s *FirestoreRepository) authorize(tx *firestore.Transaction, a Actor) error {
+	if a.AgentKeyDigest != "" || a.UploadTicketDigest != "" {
+		return session.ErrUnauthorized
+	}
+	if !a.firebaseBearerUntil.IsZero() {
+		return a.authorizeFirebaseBearer(s.now())
+	}
 	if !digestRE.MatchString(a.SessionDigest) || a.AnonymousID == "" {
 		return session.ErrUnauthorized
 	}
@@ -476,7 +482,10 @@ func (s *FirestoreRepository) ListOwned(ctx context.Context, a Actor, cursor str
 		if err := s.authorize(tx, a); err != nil {
 			return err
 		}
-		owners := []string{ownerKey(Owner{"anonymous", a.AnonymousID})}
+		owners := []string{}
+		if a.AnonymousID != "" {
+			owners = append(owners, ownerKey(Owner{"anonymous", a.AnonymousID}))
+		}
 		if a.UID != "" {
 			owners = append(owners, ownerKey(Owner{"firebase", a.UID}))
 		}

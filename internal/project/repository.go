@@ -33,14 +33,34 @@ type Owner struct {
 	ID   string `firestore:"id" json:"-"`
 }
 
-// Actor is constructed from a verified session, never decoded from HTTP input.
-// Mutations re-read that session inside the authoritative metadata transaction.
+// Actor is constructed from verified credentials, never decoded from HTTP input.
+// Transactions re-read sessions/keys/tickets or check the verified JWT expiry.
 type Actor struct {
-	SessionDigest      string
-	AnonymousID        string
-	UID                string
-	AgentKeyDigest     string
-	UploadTicketDigest string
+	SessionDigest       string
+	AnonymousID         string
+	UID                 string
+	AgentKeyDigest      string
+	UploadTicketDigest  string
+	firebaseBearerUntil time.Time
+}
+
+// ActorFromFirebase must only receive an identity from Firebase JWT verification.
+// The private marker cannot be populated by decoding a user-supplied actor/UID.
+func ActorFromFirebase(identity session.AgentIdentity) (Actor, error) {
+	if identity.UID == "" || identity.ExpiresAt.IsZero() {
+		return Actor{}, session.ErrUnauthorized
+	}
+	if identity.Provider != "google.com" {
+		return Actor{}, ErrForbidden
+	}
+	return Actor{UID: identity.UID, firebaseBearerUntil: identity.ExpiresAt}, nil
+}
+
+func (a Actor) authorizeFirebaseBearer(now time.Time) error {
+	if a.UID == "" || !now.Before(a.firebaseBearerUntil) || a.SessionDigest != "" || a.AnonymousID != "" || a.AgentKeyDigest != "" || a.UploadTicketDigest != "" {
+		return session.ErrUnauthorized
+	}
+	return nil
 }
 
 func ActorFrom(token string, view session.View) (Actor, error) {

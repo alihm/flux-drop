@@ -32,6 +32,9 @@ func (s *RaftRepository) authorize(tx *raftTx, a Actor) error {
 	if a.AgentKeyDigest != "" || a.UploadTicketDigest != "" {
 		return session.ErrUnauthorized
 	}
+	if !a.firebaseBearerUntil.IsZero() {
+		return a.authorizeFirebaseBearer(s.now())
+	}
 	if !digestRE.MatchString(a.SessionDigest) || a.AnonymousID == "" {
 		return session.ErrUnauthorized
 	}
@@ -52,6 +55,9 @@ func (s *RaftRepository) authorize(tx *raftTx, a Actor) error {
 }
 
 func (s *RaftRepository) authorizePublish(tx *raftTx, a Actor) error {
+	if !a.firebaseBearerUntil.IsZero() {
+		return s.authorize(tx, a)
+	}
 	if a.UploadTicketDigest != "" {
 		return s.authorizeUploadTicket(tx, a)
 	}

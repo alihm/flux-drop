@@ -160,6 +160,49 @@ func TestFirestoreClaimAndOwnershipQueries(t *testing.T) {
 	}
 }
 
+func TestFirestoreFirebaseBearerOwnership(t *testing.T) {
+	r := testRepo(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	r.Now = func() time.Time { return now }
+	bearer, err := ActorFromFirebase(session.AgentIdentity{UID: "alice", Provider: "google.com", ExpiresAt: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	browser := actor(t, r, "alice")
+	other := actor(t, r, "bob")
+	publisher := &Publisher{Repository: r, DataRoot: t.TempDir()}
+	ctx := context.Background()
+	first := publish(t, publisher, bearer, "bearer-publish", "bearer owned content")
+	second := publish(t, publisher, browser, "browser-publish", "browser owned content")
+	if first.ExpiresAt != nil || first.Owner != (Owner{"firebase", "alice"}) {
+		t.Fatal("bearer publish has incorrect account ownership", first)
+	}
+	list, _, err := r.ListOwned(ctx, bearer, "", 50)
+	if err != nil || len(list) != 2 {
+		t.Fatal("bearer did not see browser and bearer projects", list, err)
+	}
+	for _, a := range []Actor{browser, bearer} {
+		for _, id := range []string{first.ID, second.ID} {
+			if _, err := r.GetOwned(ctx, a, id); err != nil {
+				t.Fatal("same UID could not access account project", err)
+			}
+		}
+	}
+	if _, err := r.GetOwned(ctx, other, first.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatal("bearer project disclosed to another user", err)
+	}
+	if err := r.Tombstone(ctx, bearer, first.ID, first.Revision+1); !errors.Is(err, ErrConflict) {
+		t.Fatal("stale revision bypassed for bearer", err)
+	}
+	if err := r.Tombstone(ctx, bearer, first.ID, first.Revision); err != nil {
+		t.Fatal("bearer could not delete own project", err)
+	}
+	now = now.Add(time.Hour)
+	if _, _, err := r.ListOwned(ctx, bearer, "", 50); !errors.Is(err, session.ErrUnauthorized) {
+		t.Fatal("expired bearer retained authority", err)
+	}
+}
+
 func TestFirestoreConcurrentQuotaAndUpdates(t *testing.T) {
 	r := testRepo(t)
 	r.AnonymousLimit = 1

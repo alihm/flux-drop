@@ -9,7 +9,9 @@ import (
 	"strings"
 
 	"github.com/runonflux/flux-drop/internal/content"
+	"github.com/runonflux/flux-drop/internal/firebaseconfig"
 	"github.com/runonflux/flux-drop/internal/password"
+	"github.com/runonflux/flux-drop/internal/session"
 )
 
 type Config struct {
@@ -67,6 +69,18 @@ func NewWithDependencies(c Config, dependencies Dependencies) (http.Handler, err
 	if dependencies.Projects != nil {
 		if dependencies.Sessions == nil || dependencies.Projects.Repository == nil || dependencies.Projects.DataRoot == "" {
 			return nil, fmt.Errorf("project APIs require sessions, repository, and storage")
+		}
+		if dependencies.ProjectBearerVerifier == nil {
+			if dependencies.AgentAuth != nil {
+				dependencies.ProjectBearerVerifier, _ = dependencies.AgentAuth.verifier.(*session.AgentFirebaseVerifier)
+			}
+			if dependencies.ProjectBearerVerifier == nil {
+				projectID := firebaseconfig.ProjectID
+				if dependencies.FirebaseWeb != nil {
+					projectID = dependencies.FirebaseWeb.ProjectID
+				}
+				dependencies.ProjectBearerVerifier = &session.AgentFirebaseVerifier{ProjectID: projectID}
+			}
 		}
 		hasher := password.NewHasher()
 		registerProjects(mux, c, dependencies, hasher)

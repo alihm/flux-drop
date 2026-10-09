@@ -168,23 +168,15 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 	}
 	mux.Handle("POST /api/projects", mutate(upload(false, actor)))
 	mux.Handle("POST /api/projects/{id}/versions", mutate(upload(true, actor)))
+	bearerActor := projectBearerActor(deps, false)
+	mux.HandleFunc("POST /api/agent/projects", withAgentUploadKey(upload(false, projectBearerActor(deps, true))))
+	mux.HandleFunc("POST /api/agent/projects/{id}/versions", withAgentUploadKey(upload(true, bearerActor)))
 	if keys, ok := deps.Projects.Repository.(interface {
 		IssueAgentKey(context.Context, project.Actor, string) (string, project.AgentKey, error)
 		ListAgentKeys(context.Context, project.Actor) ([]project.AgentKey, error)
 		RevokeAgentKey(context.Context, project.Actor, string) error
 		AuthenticateAgentKey(context.Context, string) (project.Actor, error)
 	}); ok {
-		agentActor := func(r *http.Request, _ bool) (project.Actor, error) {
-			if r.Header.Get("Origin") != "" || len(r.Header.Values("Authorization")) != 1 {
-				return project.Actor{}, session.ErrUnauthorized
-			}
-			secret, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if !found {
-				return project.Actor{}, session.ErrUnauthorized
-			}
-			return keys.AuthenticateAgentKey(r.Context(), secret)
-		}
-		mux.HandleFunc("POST /api/agent/projects", upload(false, agentActor))
 		mux.HandleFunc("GET /api/agent-keys", func(w http.ResponseWriter, r *http.Request) {
 			a, err := actor(r, false)
 			if err != nil {
@@ -235,46 +227,50 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 		}))
 	}
 	privacy := &project.PrivacyService{Repository: deps.Projects.Repository, DataRoot: deps.Projects.DataRoot, Hasher: hasher}
-	mux.Handle("PUT /api/projects/{id}/privacy", mutate(func(w http.ResponseWriter, r *http.Request) {
-		r, cancel := bounded(r)
-		defer cancel()
-		a, err := actor(r, true)
-		if err != nil {
-			projectError(w, err)
-			return
+	changePrivacy := func(resolve func(*http.Request, bool) (project.Actor, error)) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			r, cancel := bounded(r)
+			defer cancel()
+			a, err := resolve(r, true)
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			revision, err := expectedRevision(r)
+			if err != nil {
+				revisionError(w, err)
+				return
+			}
+			kind, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if err != nil || kind != "application/json" {
+				projectError(w, project.ErrInvalid)
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, 8192)
+			var input struct {
+				Private  *bool  `json:"private"`
+				Password string `json:"password"`
+			}
+			decoder := json.NewDecoder(r.Body)
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&input); err != nil {
+				projectError(w, errors.Join(project.ErrInvalid, err))
+				return
+			}
+			if input.Private == nil || decoder.Decode(new(any)) != io.EOF {
+				projectError(w, project.ErrInvalid)
+				return
+			}
+			p, err := privacy.Change(r.Context(), a, r.PathValue("id"), revision, *input.Private, input.Password)
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			respondProject(w, p)
 		}
-		revision, err := expectedRevision(r)
-		if err != nil {
-			revisionError(w, err)
-			return
-		}
-		kind, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		if err != nil || kind != "application/json" {
-			projectError(w, project.ErrInvalid)
-			return
-		}
-		r.Body = http.MaxBytesReader(w, r.Body, 8192)
-		var input struct {
-			Private  *bool  `json:"private"`
-			Password string `json:"password"`
-		}
-		decoder := json.NewDecoder(r.Body)
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&input); err != nil {
-			projectError(w, errors.Join(project.ErrInvalid, err))
-			return
-		}
-		if input.Private == nil || decoder.Decode(new(any)) != io.EOF {
-			projectError(w, project.ErrInvalid)
-			return
-		}
-		p, err := privacy.Change(r.Context(), a, r.PathValue("id"), revision, *input.Private, input.Password)
-		if err != nil {
-			projectError(w, err)
-			return
-		}
-		respondProject(w, p)
-	}))
+	}
+	mux.Handle("PUT /api/projects/{id}/privacy", mutate(changePrivacy(actor)))
+	mux.HandleFunc("PUT /api/agent/projects/{id}/privacy", changePrivacy(bearerActor))
 	mux.Handle("PUT /api/projects/{id}/watermark", mutate(func(w http.ResponseWriter, r *http.Request) {
 		r, cancel := bounded(r)
 		defer cancel()
@@ -314,75 +310,87 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 		}
 		respondProject(w, p)
 	}))
-	mux.Handle("PATCH /api/projects/{id}", mutate(func(w http.ResponseWriter, r *http.Request) {
-		r, cancel := bounded(r)
-		defer cancel()
-		a, err := actor(r, true)
-		if err != nil {
-			projectError(w, err)
-			return
+	rename := func(resolve func(*http.Request, bool) (project.Actor, error)) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			r, cancel := bounded(r)
+			defer cancel()
+			a, err := resolve(r, true)
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			revision, err := expectedRevision(r)
+			if err != nil {
+				revisionError(w, err)
+				return
+			}
+			kind, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if err != nil || kind != "application/json" {
+				projectError(w, project.ErrInvalid)
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, 4096)
+			var input struct {
+				Name string `json:"name"`
+			}
+			decoder := json.NewDecoder(r.Body)
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&input); err != nil {
+				projectError(w, errors.Join(project.ErrInvalid, err))
+				return
+			}
+			if decoder.Decode(new(any)) != io.EOF {
+				projectError(w, project.ErrInvalid)
+				return
+			}
+			p, err := deps.Projects.Repository.Rename(r.Context(), a, r.PathValue("id"), input.Name, revision)
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			respondProject(w, p)
 		}
-		revision, err := expectedRevision(r)
-		if err != nil {
-			revisionError(w, err)
-			return
+	}
+	mux.Handle("PATCH /api/projects/{id}", mutate(rename(actor)))
+	mux.HandleFunc("PATCH /api/agent/projects/{id}", rename(bearerActor))
+	list := func(resolve func(*http.Request, bool) (project.Actor, error)) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			r, cancel := bounded(r)
+			defer cancel()
+			a, err := resolve(r, false)
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			projects, next, err := deps.Projects.Repository.ListOwned(r.Context(), a, r.URL.Query().Get("cursor"), 50)
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			respond(w, 200, map[string]any{"projects": projects, "nextCursor": next})
 		}
-		kind, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		if err != nil || kind != "application/json" {
-			projectError(w, project.ErrInvalid)
-			return
+	}
+	mux.HandleFunc("GET /api/projects", list(actor))
+	mux.HandleFunc("GET /api/agent/projects", list(bearerActor))
+	get := func(resolve func(*http.Request, bool) (project.Actor, error)) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			r, cancel := bounded(r)
+			defer cancel()
+			a, err := resolve(r, false)
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			p, err := deps.Projects.Repository.GetOwned(r.Context(), a, r.PathValue("id"))
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			respondProject(w, p)
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 4096)
-		var input struct {
-			Name string `json:"name"`
-		}
-		decoder := json.NewDecoder(r.Body)
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&input); err != nil {
-			projectError(w, errors.Join(project.ErrInvalid, err))
-			return
-		}
-		if decoder.Decode(new(any)) != io.EOF {
-			projectError(w, project.ErrInvalid)
-			return
-		}
-		p, err := deps.Projects.Repository.Rename(r.Context(), a, r.PathValue("id"), input.Name, revision)
-		if err != nil {
-			projectError(w, err)
-			return
-		}
-		respondProject(w, p)
-	}))
-	mux.HandleFunc("GET /api/projects", func(w http.ResponseWriter, r *http.Request) {
-		r, cancel := bounded(r)
-		defer cancel()
-		a, err := actor(r, false)
-		if err != nil {
-			projectError(w, err)
-			return
-		}
-		projects, next, err := deps.Projects.Repository.ListOwned(r.Context(), a, r.URL.Query().Get("cursor"), 50)
-		if err != nil {
-			projectError(w, err)
-			return
-		}
-		respond(w, 200, map[string]any{"projects": projects, "nextCursor": next})
-	})
-	mux.HandleFunc("GET /api/projects/{id}", func(w http.ResponseWriter, r *http.Request) {
-		r, cancel := bounded(r)
-		defer cancel()
-		a, err := actor(r, false)
-		if err != nil {
-			projectError(w, err)
-			return
-		}
-		p, err := deps.Projects.Repository.GetOwned(r.Context(), a, r.PathValue("id"))
-		if err != nil {
-			projectError(w, err)
-			return
-		}
-		respondProject(w, p)
-	})
+	}
+	mux.HandleFunc("GET /api/projects/{id}", get(actor))
+	mux.HandleFunc("GET /api/agent/projects/{id}", get(bearerActor))
 	mux.Handle("POST /api/projects/{id}/claim", mutate(func(w http.ResponseWriter, r *http.Request) {
 		r, cancel := bounded(r)
 		defer cancel()
@@ -467,25 +475,29 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 			respondProject(w, claimed)
 		}))
 	}
-	mux.Handle("DELETE /api/projects/{id}", mutate(func(w http.ResponseWriter, r *http.Request) {
-		r, cancel := bounded(r)
-		defer cancel()
-		a, err := actor(r, true)
-		if err != nil {
-			projectError(w, err)
-			return
+	remove := func(resolve func(*http.Request, bool) (project.Actor, error)) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			r, cancel := bounded(r)
+			defer cancel()
+			a, err := resolve(r, true)
+			if err != nil {
+				projectError(w, err)
+				return
+			}
+			revision, err := expectedRevision(r)
+			if err != nil {
+				revisionError(w, err)
+				return
+			}
+			if err := deps.Projects.Repository.Tombstone(r.Context(), a, r.PathValue("id"), revision); err != nil {
+				projectError(w, err)
+				return
+			}
+			w.WriteHeader(204)
 		}
-		revision, err := expectedRevision(r)
-		if err != nil {
-			revisionError(w, err)
-			return
-		}
-		if err := deps.Projects.Repository.Tombstone(r.Context(), a, r.PathValue("id"), revision); err != nil {
-			projectError(w, err)
-			return
-		}
-		w.WriteHeader(204)
-	}))
+	}
+	mux.Handle("DELETE /api/projects/{id}", mutate(remove(actor)))
+	mux.HandleFunc("DELETE /api/agent/projects/{id}", remove(bearerActor))
 }
 
 var errRevisionRequired = errors.New("revision required")

@@ -152,7 +152,10 @@ func (s *RaftRepository) ListOwned(ctx context.Context, a Actor, cursor string, 
 		if err := s.authorize(tx, a); err != nil {
 			return err
 		}
-		owners := []Owner{{"anonymous", a.AnonymousID}}
+		owners := []Owner{}
+		if a.AnonymousID != "" {
+			owners = append(owners, Owner{"anonymous", a.AnonymousID})
+		}
 		if a.UID != "" {
 			owners = append(owners, Owner{"firebase", a.UID})
 		}

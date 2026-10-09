@@ -89,10 +89,7 @@ func TestAgentHTTPKeyPublishAndRevoke(t *testing.T) {
 	if listed.Code != 200 || strings.Contains(listed.Body.String(), credential.Key) {
 		t.Fatal("key leaked in list", listed.Code, listed.Body.String())
 	}
-	if w := uploadForTest(t, h, "/api/agent/projects?name=bad", credential.Key, "https://evil.example", nil, "", "origin-key"); w.Code != 401 {
-		t.Fatal("browser origin accepted", w.Code)
-	}
-	w := uploadForTest(t, h, "/api/agent/projects?name=from-agent", credential.Key, "", nil, "", "agent-key-1")
+	w := uploadForTest(t, h, "/api/agent/projects?name=from-agent", credential.Key, "https://evil.example", nil, "", "agent-key-1")
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}

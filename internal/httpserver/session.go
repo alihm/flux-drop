@@ -17,16 +17,17 @@ import (
 const sessionCookie = "__Host-drop-session"
 
 type Dependencies struct {
-	Sessions      *session.Service
-	Projects      *project.Publisher
-	Fallback      ProjectFallback
-	FirebaseWeb   *FirebaseWebConfig
-	Readiness     func(context.Context) error
-	StagingRoot   string
-	StorageStatus http.Handler
-	Admin         http.Handler
-	Previews      *preview.Service
-	AgentAuth     *AgentAuth
+	Sessions              *session.Service
+	Projects              *project.Publisher
+	Fallback              ProjectFallback
+	FirebaseWeb           *FirebaseWebConfig
+	Readiness             func(context.Context) error
+	StagingRoot           string
+	StorageStatus         http.Handler
+	Admin                 http.Handler
+	Previews              *preview.Service
+	AgentAuth             *AgentAuth
+	ProjectBearerVerifier *session.AgentFirebaseVerifier
 }
 
 func registerSessions(mux *http.ServeMux, origin string, service *session.Service) {

@@ -88,6 +88,7 @@ func run() error {
 		return err
 	}
 	dependencies := httpserver.Dependencies{}
+	dependencies.ProjectBearerVerifier = &session.AgentFirebaseVerifier{ProjectID: projectID}
 	webConfig, err := httpserver.FirebaseWebFromEnv(os.Getenv)
 	if err != nil {
 		return err

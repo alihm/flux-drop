@@ -70,7 +70,7 @@ func (s *RaftRepository) AgentTransaction(ctx context.Context, fn func(*metadata
 }
 
 func (s *RaftRepository) authorizeUploadTicket(tx *raftTx, a Actor) error {
-	if !digestRE.MatchString(a.UploadTicketDigest) || a.UID == "" || a.SessionDigest != "" || a.AnonymousID != "" || a.AgentKeyDigest != "" {
+	if !digestRE.MatchString(a.UploadTicketDigest) || a.UID == "" || a.SessionDigest != "" || a.AnonymousID != "" || a.AgentKeyDigest != "" || !a.firebaseBearerUntil.IsZero() {
 		return session.ErrUnauthorized
 	}
 	ticket, err := raftRead[AgentUploadTicket](tx, "agent_upload_tickets/"+a.UploadTicketDigest)

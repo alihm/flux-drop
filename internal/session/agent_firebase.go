@@ -17,10 +17,14 @@ import (
 
 const SecureTokenJWKS = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com"
 
-type AgentIdentity struct{ UID, Email, Provider string }
+type AgentIdentity struct {
+	UID, Email, Provider string
+	ExpiresAt            time.Time
+}
 
-// AgentFirebaseVerifier accepts only signed, verified Google/password accounts.
-// Its separate policy never relaxes Drop's existing Google-only session verifier.
+// AgentFirebaseVerifier verifies signed Firebase identities. Verify restricts
+// consent to Google/password accounts; VerifyBearer leaves provider policy to
+// the caller. Neither changes Drop's Google-only browser session verifier.
 // JWKSURL/Client are injectable for hermetic tests, not browser/env input.
 type AgentFirebaseVerifier struct {
 	ProjectID      string
@@ -43,6 +47,21 @@ type agentClaims struct {
 }
 
 func (v *AgentFirebaseVerifier) Verify(ctx context.Context, raw string) (AgentIdentity, error) {
+	identity, err := v.verifyIDToken(ctx, raw, time.Minute)
+	if err == nil && identity.Provider != "google.com" && identity.Provider != "password" {
+		return AgentIdentity{}, ErrUnauthorized
+	}
+	return identity, err
+}
+
+// VerifyBearer verifies a live Firebase identity without requiring a recent
+// auth_time. Callers must enforce their provider policy separately. Unlike the
+// browser/consent verifier, this server-to-server API permits no future iat.
+func (v *AgentFirebaseVerifier) VerifyBearer(ctx context.Context, raw string) (AgentIdentity, error) {
+	return v.verifyIDToken(ctx, raw, 0)
+}
+
+func (v *AgentFirebaseVerifier) verifyIDToken(ctx context.Context, raw string, issuedAtSkew time.Duration) (AgentIdentity, error) {
 	if len(raw) == 0 || len(raw) > 16<<10 {
 		return AgentIdentity{}, ErrUnauthorized
 	}
@@ -60,10 +79,10 @@ func (v *AgentFirebaseVerifier) Verify(ctx context.Context, raw string) (AgentId
 		}
 		return v.key(ctx, kid, now)
 	})
-	if err != nil || !parsed.Valid || claims.Issuer != "https://securetoken.google.com/"+v.ProjectID || len(claims.Audience) != 1 || claims.Audience[0] != v.ProjectID || claims.Subject == "" || len(claims.Subject) > 128 || claims.ExpiresAt == nil || !now.Before(claims.ExpiresAt.Time) || claims.ExpiresAt.Time.After(now.Add(time.Hour+time.Minute)) || claims.IssuedAt == nil || claims.IssuedAt.Time.After(now.Add(time.Minute)) || (claims.NotBefore != nil && claims.NotBefore.Time.After(now)) || claims.AuthTime <= 0 || claims.AuthTime > now.Add(time.Minute).Unix() || !claims.EmailVerified || claims.Email == "" || claims.Firebase.Tenant != "" || (claims.Firebase.Provider != "google.com" && claims.Firebase.Provider != "password") {
+	if err != nil || !parsed.Valid || claims.Issuer != "https://securetoken.google.com/"+v.ProjectID || len(claims.Audience) != 1 || claims.Audience[0] != v.ProjectID || claims.Subject == "" || len(claims.Subject) > 128 || claims.ExpiresAt == nil || !now.Before(claims.ExpiresAt.Time) || claims.ExpiresAt.Time.After(now.Add(time.Hour+time.Minute)) || claims.IssuedAt == nil || claims.IssuedAt.Time.After(now.Add(issuedAtSkew)) || (claims.NotBefore != nil && claims.NotBefore.Time.After(now)) || claims.AuthTime <= 0 || claims.AuthTime > now.Add(time.Minute).Unix() || !claims.EmailVerified || claims.Email == "" || claims.Firebase.Tenant != "" {
 		return AgentIdentity{}, ErrUnauthorized
 	}
-	return AgentIdentity{claims.Subject, claims.Email, claims.Firebase.Provider}, nil
+	return AgentIdentity{UID: claims.Subject, Email: claims.Email, Provider: claims.Firebase.Provider, ExpiresAt: claims.ExpiresAt.Time}, nil
 }
 func (v *AgentFirebaseVerifier) key(ctx context.Context, kid string, now time.Time) (*rsa.PublicKey, error) {
 	v.mu.Lock()

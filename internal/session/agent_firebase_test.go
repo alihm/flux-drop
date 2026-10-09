@@ -66,6 +66,24 @@ func TestAgentFirebaseJWKSVerification(t *testing.T) {
 	if _, err := v.Verify(context.Background(), password); err != nil {
 		t.Fatal("password policy rejected", err)
 	}
+	oldSignIn := sign(func(c jwt.MapClaims) { c["auth_time"] = now.Add(-30 * 24 * time.Hour).Unix() })
+	identity, err := v.VerifyBearer(context.Background(), oldSignIn)
+	if err != nil || identity.UID != "user" || !identity.ExpiresAt.Equal(now.Add(time.Hour)) {
+		t.Fatal("live bearer rejected old sign-in or lost expiry", identity, err)
+	}
+	futureIssued := sign(func(c jwt.MapClaims) { c["iat"] = now.Add(time.Second).Unix() })
+	if _, err := v.VerifyBearer(context.Background(), futureIssued); err == nil {
+		t.Fatal("bearer accepted future iat")
+	}
+	if _, err := v.Verify(context.Background(), futureIssued); err != nil {
+		t.Fatal("existing consent clock skew changed", err)
+	}
+	// Authentication establishes identity; the project API returns 403 for a
+	// verified non-Google provider rather than treating it as a bad signature.
+	nonGoogle := sign(func(c jwt.MapClaims) { c["firebase"] = map[string]string{"sign_in_provider": "github.com"} })
+	if identity, err := v.VerifyBearer(context.Background(), nonGoogle); err != nil || identity.Provider != "github.com" {
+		t.Fatal("bearer provider policy was not delegated", identity, err)
+	}
 	if _, err := v.Verify(context.Background(), raw[:len(raw)-10]+"xxxxxxxxxx"); err == nil {
 		t.Fatal("bad signature accepted")
 	}
