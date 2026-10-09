@@ -44,9 +44,12 @@ The existing `GET /api/config` adds `agentAuthEnabled: boolean`.
 6. The client exchanges the code and retains opaque OAuth access/refresh tokens.
    The gateway validates the access token and substitutes a fresh **Firebase ID
    token**, never an agent token, on the website's upstream MCP request.
-7. Website pages manage connections and create upload links with their own live
-   Firebase ID token, through the bearer-only APIs below. No website secret or
-   shared website storage is needed.
+7. The website's MCP tools use that live Firebase ID token with the Firebase
+   bearer project API below. Do not call `/api/auth/google` to open a browser
+   session: refreshed tokens retain their original `auth_time`, while browser
+   login deliberately requires a recent sign-in. Website pages also manage
+   connections and create upload links with their own live Firebase ID token.
+   No website secret or shared website storage is needed.
 
 The website must distinguish its accepted Firebase JWTs from Drop's opaque
 43-character base64url access tokens. Never send a Firebase JWT through Drop's
@@ -332,6 +335,103 @@ Unsupported media types return 415. Publisher failures keep their existing JSON
 error shapes (`{"error":"<publisher code>"}`, sometimes with a duplicate path).
 The receipt stops being available when the ticket expires.
 
+## Firebase bearer project API
+
+These server-to-server endpoints authenticate **only**
+`Authorization: Bearer <Firebase ID token>`. Drop verifies the RS256 signature
+against Google's securetoken JWKS, issuer
+`https://securetoken.google.com/fluxcore-prod`, audience `fluxcore-prod`, future
+expiry, `iat` no later than the current time, verified email, absence of a tenant,
+and provider `google.com`. A custom deployment uses its existing
+`FIREBASE_PROJECT_ID` instead. A live refreshed token can have an arbitrarily old
+`auth_time`; no recent sign-in is required. Browser login's five-minute recency
+requirement remains unchanged.
+
+The actor is the Firebase UID, with access only to that account's owned projects,
+including projects created through browser sessions, API keys and upload links.
+Browser cookies do not grant access to anonymous projects on these endpoints.
+Publishing creates an account-owned project with `expiresAt: null`. Requests
+do not create or read a Drop session. Cookies, CSRF headers, Origin and fetch
+metadata are ignored, and responses set neither cookies nor CORS headers.
+These routes are available wherever project publishing is configured, independently
+of `DROP_AGENT_AUTH_ENABLED`; no new setting or port is needed.
+
+The existing `drop_...` agent keys remain valid **only** for
+`POST /api/agent/projects`. On every other route in this section they return 403
+`account_required`. Opaque OAuth access tokens are not Firebase tokens and cannot
+be used here; they belong on `/agent/mcp`.
+
+### Requests and successful responses
+
+`D` is the Drop public origin. Every request requires the bearer header above.
+Single-project responses use exactly the existing session API's envelope:
+
+```json
+{"project":{"id":"<ID>","owner":{"kind":"firebase"},"slug":"my-site","initialSuffix":"","digest":"<SHA-256>","bytes":123,"revision":1,"watermarkDisabled":false,"private":false,"status":"active","createdAt":"2026-10-09T00:00:00Z","updatedAt":"2026-10-09T00:00:00Z","expiresAt":null},"path":"/my-site/","claimPath":"/?claim=<ID>"}
+```
+
+UIDs, storage placement and password hashes are never included. Use `D + path`
+for the public URL. Each single-project response has `ETag: "<revision>"`.
+
+| Method and path | Request | Success |
+| --- | --- | --- |
+| `GET D/api/agent/projects[?cursor=<nextCursor>]` | No body. Omit the cursor for the first page. | 200 `{"projects":[<Project>,...],"nextCursor":"<cursor or empty string>"}`; up to 50 projects, in the same order as the session API. |
+| `GET D/api/agent/projects/{id}` | No body. | 200 single-project envelope above. |
+| `POST D/api/agent/projects[?name=<name>]` | Multipart `files`, a single HTML document, or a ZIP as described below. Optional `Idempotency-Key` and `X-Drop-Password`. | 200 single-project envelope, owned by the UID with no anonymous expiry. |
+| `POST D/api/agent/projects/{id}/versions[?name=]` | Same upload bodies; required `If-Match`; optional `Idempotency-Key`. Existing version rules require `name` to be absent or empty and prohibit `X-Drop-Password`; use PATCH/PUT to rename or change privacy. | 200 single-project envelope with the same ID/slug, a new active digest and incremented revision. Existing privacy is retained. |
+| `PATCH D/api/agent/projects/{id}` | `Content-Type: application/json`, `{"name":"new-name"}`; required `If-Match`. | 200 single-project envelope with renamed slug and incremented revision (unchanged when the slug already matches). |
+| `PUT D/api/agent/projects/{id}/privacy` | `Content-Type: application/json`, `{"private":true,"password":"at least 12 characters"}` or `{"private":false}`; required `If-Match`. | 200 single-project envelope with updated privacy and incremented revision. |
+| `DELETE D/api/agent/projects/{id}` | No body; required `If-Match`. | 204, empty body. |
+
+`If-Match` must contain exactly one quoted positive integer revision, for example
+`If-Match: "3"`, taken from the project JSON or ETag. Reads and mutations of another
+user's project return 404, just like an unknown project.
+
+Upload media types are `text/html`, `application/zip`, or `multipart/form-data`
+with one or more `files` parts, using the same filename/path rules as the session
+API. Existing upload/expanded-size/file-count limits, ZIP safety, disk admission,
+worker limits, account quotas, rate limits and revision checks all apply. Names
+follow the existing pattern `^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$` (1–48
+characters, starting and ending with a letter or digit). If the chosen name is
+already occupied, normal publishing slug allocation applies.
+
+For a private initial publish, `X-Drop-Password` is **unpadded base64url of the
+UTF-8 password**, not plaintext; passwords require at least 12 characters. PUT
+privacy uses the plaintext JSON password over HTTPS. Versions keep privacy and
+cannot set the password through an upload header.
+
+`Idempotency-Key` is optional on the two agent upload routes. If supplied, it must
+be a single value matching `^[A-Za-z0-9_-]{8,128}$`. Reuse the same key and request
+metadata/content for safe retries, including across Firebase token refreshes:
+operations are scoped to the UID. A changed request with the same key returns a
+conflict. Without a key, each upload starts a new operation and has no retry
+deduplication guarantee. The session API's existing key requirement is unchanged.
+
+### Errors
+
+These routes retain the session project API's JSON errors, normally
+`{"error":"<code>"}` (not OAuth's `error_description` envelope):
+
+| Status | Codes |
+| --- | --- |
+| 400 | `invalid_project` (including invalid cursor, name, upload media, JSON or idempotency key), `invalid_password`, `invalid_if_match` |
+| 401 | `authentication_required` (missing, malformed, duplicate, expired or invalid Firebase bearer) |
+| 403 | `account_required` (verified non-Google provider, or an agent key outside initial publishing) |
+| 404 | `project_not_found` (unknown, deleted or not owned) |
+| 409 | `project_conflict` (including stale revision or changed idempotent operation), `project_quota`, `duplicate_content` (also includes `path`) |
+| 413 | `upload_limit` |
+| 428 | `revision_required` |
+| 429 | `upload_busy`, `password_busy` (with `Retry-After`) |
+| 503 | `storage_unavailable`, `authentication_unavailable` |
+
+Responses have `Cache-Control: no-store`. Bearer expiry is rechecked inside
+authoritative metadata transactions, including upload activation. The Firebase
+ID token is verified on each HTTP request (JWKS are cached); it is not persisted
+or exchanged for a Drop session. Like other Firebase ID-token APIs, disabling
+an account or revoking its refresh token does not invalidate an already minted
+ID token before expiry. Disconnecting the OAuth grant stops the gateway issuing
+further Firebase tokens; it does not prematurely expire one already issued.
+
 ## Cookies and CORS
 
 Consent sets only `__Host-drop-agent`: Secure, HttpOnly, Path=/, **no Domain**,
@@ -353,7 +453,9 @@ GET/POST/DELETE/OPTIONS, `Vary: Origin`, max-age 600; they never send
 `Access-Control-Allow-Credentials` and never authenticate cookies. Untrusted,
 null, duplicate Origins, and unsupported preflight headers are refused. Use
 `credentials: 'omit'` from website pages. The gateway and ticket PUT endpoint are
-server/agent-facing and do not expose cross-origin browser CORS.
+server/agent-facing and do not expose cross-origin browser CORS. The Firebase
+bearer project API likewise sends no CORS headers and ignores all browser
+credentials and Origin headers; it is intended for server-side MCP tools.
 
 OPTIONS returns 204 for the two discovery URLs, `/oauth/register`, `/oauth/token`,
 `/oauth/revoke`, `/api/agent-grants`, `/api/agent-grants/{id}` and
