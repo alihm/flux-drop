@@ -35,7 +35,7 @@
     busy = true; state(); status.textContent = action === 'allow' ? 'Connecting…' : 'Returning to your agent…';
     try {
       const credentials = action === 'allow' ? await window.DropAuth.credentials() : {};
-      const response = await fetch('/oauth/authorize', {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({handle: page.dataset.handle, csrf: page.dataset.csrf, action, ...(action === 'allow' ? {idToken: credentials.idToken, refreshToken: credentials.refreshToken} : {})})});
+      const response = await fetch(window.location.pathname, {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({handle: page.dataset.handle, csrf: page.dataset.csrf, action, ...(action === 'allow' ? {idToken: credentials.idToken, refreshToken: credentials.refreshToken} : {})})});
       const result = await response.json();
       if (!response.ok) throw new Error(result.error_description || 'Could not complete the connection.');
       try { await window.DropAuth.clear(); } catch { /* The connection is already saved. */ }

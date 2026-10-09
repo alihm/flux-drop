@@ -29,11 +29,14 @@ import (
 type AgentAuthConfig struct {
 	Enabled                              bool
 	Resource, Upstream, ResourceMetadata string
+	AuthorizeURL                         string
 	WebsiteOrigins                       []string
 }
 
+const defaultAgentAuthorizeURL = "https://runonflux.com/apps/oauth/authorize"
+
 func AgentAuthFromEnv(get func(string) string) (AgentAuthConfig, error) {
-	c := AgentAuthConfig{Enabled: true, Resource: "https://runonflux.com/apps/mcp", Upstream: "https://runonflux.com/apps/mcp", ResourceMetadata: "https://runonflux.com/apps/.well-known/oauth-protected-resource", WebsiteOrigins: []string{"https://runonflux.com"}}
+	c := AgentAuthConfig{Enabled: true, Resource: "https://runonflux.com/apps/mcp", Upstream: "https://runonflux.com/apps/mcp", ResourceMetadata: "https://runonflux.com/apps/.well-known/oauth-protected-resource", AuthorizeURL: defaultAgentAuthorizeURL, WebsiteOrigins: []string{"https://runonflux.com"}}
 	switch get("DROP_AGENT_AUTH_ENABLED") {
 	case "", "true":
 	case "false":
@@ -41,7 +44,7 @@ func AgentAuthFromEnv(get func(string) string) (AgentAuthConfig, error) {
 	default:
 		return c, errors.New("DROP_AGENT_AUTH_ENABLED must be true or false")
 	}
-	for key, dst := range map[string]*string{"DROP_AGENT_RESOURCE": &c.Resource, "DROP_AGENT_MCP_UPSTREAM": &c.Upstream, "DROP_AGENT_RESOURCE_METADATA": &c.ResourceMetadata} {
+	for key, dst := range map[string]*string{"DROP_AGENT_RESOURCE": &c.Resource, "DROP_AGENT_MCP_UPSTREAM": &c.Upstream, "DROP_AGENT_RESOURCE_METADATA": &c.ResourceMetadata, "DROP_AGENT_AUTHORIZE_URL": &c.AuthorizeURL} {
 		if s := get(key); s != "" {
 			*dst = s
 		}
@@ -53,6 +56,9 @@ func AgentAuthFromEnv(get func(string) string) (AgentAuthConfig, error) {
 		if !agentHTTPSURL(s) {
 			return c, errors.New("agent URLs must be HTTPS without credentials or fragments")
 		}
+	}
+	if _, err := agentAuthorizeOrigin(c.AuthorizeURL); err != nil {
+		return c, err
 	}
 	for i, s := range c.WebsiteOrigins {
 		c.WebsiteOrigins[i] = strings.TrimSpace(s)
@@ -66,6 +72,15 @@ func AgentAuthFromEnv(get func(string) string) (AgentAuthConfig, error) {
 func agentHTTPSURL(s string) bool {
 	u, e := url.Parse(s)
 	return e == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.Fragment == "" && !u.ForceQuery && !strings.ContainsAny(s, "\r\n\\")
+}
+
+func agentAuthorizeOrigin(endpoint string) (string, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil || !agentHTTPSURL(endpoint) || u.RawQuery != "" || strings.Contains(endpoint, "#") {
+		return "", errors.New("DROP_AGENT_AUTHORIZE_URL must be HTTPS without credentials, query, or fragment")
+	}
+	// Browser origins lowercase hosts and omit the default HTTPS port.
+	return "https://" + strings.TrimSuffix(strings.ToLower(u.Host), ":443"), nil
 }
 
 type agentVerifier interface {
@@ -91,10 +106,11 @@ type AgentAuth struct {
 	cacheMu        sync.Mutex
 	cache          map[string]agentCachedSession
 	// CIMD documents share a bounded cache; outbound dialing has its own SSRF gate.
-	cimdMu         sync.Mutex
-	cimd           map[string]project.AgentClient
-	cimdClient     *http.Client
-	uploadsEnabled bool
+	cimdMu          sync.Mutex
+	cimd            map[string]project.AgentClient
+	cimdClient      *http.Client
+	uploadsEnabled  bool
+	authorizeOrigin string
 }
 
 func NewAgentAuth(ctx context.Context, c AgentAuthConfig, origin, secret string, repo *project.RaftRepository, web *FirebaseWebConfig) (*AgentAuth, error) {
@@ -104,7 +120,14 @@ func NewAgentAuth(ctx context.Context, c AgentAuthConfig, origin, secret string,
 	if repo == nil || repo.Store == nil || web == nil {
 		return nil, errors.New("agent authentication needs Raft metadata and Firebase browser configuration")
 	}
-	a := &AgentAuth{Config: c, Origin: origin, Repository: repo, Firebase: web, verifier: &session.AgentFirebaseVerifier{ProjectID: web.ProjectID}, client: &http.Client{Timeout: 10 * time.Second}, secureTokenURL: "https://securetoken.googleapis.com/v1/token", now: func() time.Time { return time.Now().UTC() }, cache: map[string]agentCachedSession{}, cimd: map[string]project.AgentClient{}}
+	if c.AuthorizeURL == "" {
+		c.AuthorizeURL = defaultAgentAuthorizeURL
+	}
+	authorizeOrigin, err := agentAuthorizeOrigin(c.AuthorizeURL)
+	if err != nil {
+		return nil, err
+	}
+	a := &AgentAuth{Config: c, Origin: origin, authorizeOrigin: authorizeOrigin, Repository: repo, Firebase: web, verifier: &session.AgentFirebaseVerifier{ProjectID: web.ProjectID}, client: &http.Client{Timeout: 10 * time.Second}, secureTokenURL: "https://securetoken.googleapis.com/v1/token", now: func() time.Time { return time.Now().UTC() }, cache: map[string]agentCachedSession{}, cimd: map[string]project.AgentClient{}}
 	var key []byte
 	if secret != "" {
 		key = make([]byte, 32)
@@ -226,7 +249,15 @@ func (a *AgentAuth) register(mux *http.ServeMux) {
 	}
 	mux.Handle("POST /oauth/register", a.oauthCORS(http.HandlerFunc(a.registerClient)))
 	mux.HandleFunc("GET /oauth/authorize", a.authorize)
-	mux.Handle("POST /oauth/authorize", RequireBrowserMutation(a.Origin, http.HandlerFunc(a.consent)))
+	dropConsent := RequireBrowserMutation(a.Origin, http.HandlerFunc(a.consent))
+	websiteConsent := RequireBrowserMutation(a.authorizeOrigin, http.HandlerFunc(a.consent))
+	mux.Handle("POST /oauth/authorize", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Origin") == a.authorizeOrigin {
+			websiteConsent.ServeHTTP(w, r)
+		} else {
+			dropConsent.ServeHTTP(w, r)
+		}
+	}))
 	mux.Handle("POST /oauth/token", a.oauthCORS(http.HandlerFunc(a.token)))
 	mux.Handle("POST /oauth/revoke", a.oauthCORS(http.HandlerFunc(a.revoke)))
 	for _, p := range []string{"/oauth/register", "/oauth/token", "/oauth/revoke"} {
@@ -244,7 +275,7 @@ func (a *AgentAuth) register(mux *http.ServeMux) {
 }
 func (a *AgentAuth) metadata(w http.ResponseWriter, r *http.Request) {
 	respond(w, 200, map[string]any{
-		"issuer": a.Origin, "authorization_endpoint": a.Origin + "/oauth/authorize", "token_endpoint": a.Origin + "/oauth/token", "registration_endpoint": a.Origin + "/oauth/register", "revocation_endpoint": a.Origin + "/oauth/revoke", "response_types_supported": []string{"code"}, "grant_types_supported": []string{"authorization_code", "refresh_token"}, "code_challenge_methods_supported": []string{"S256"}, "token_endpoint_auth_methods_supported": []string{"none"}, "scopes_supported": []string{"orbit", "drop"}, "client_id_metadata_document_supported": true, "authorization_response_iss_parameter_supported": true,
+		"issuer": a.Origin, "authorization_endpoint": a.Config.AuthorizeURL, "token_endpoint": a.Origin + "/oauth/token", "registration_endpoint": a.Origin + "/oauth/register", "revocation_endpoint": a.Origin + "/oauth/revoke", "response_types_supported": []string{"code"}, "grant_types_supported": []string{"authorization_code", "refresh_token"}, "code_challenge_methods_supported": []string{"S256"}, "token_endpoint_auth_methods_supported": []string{"none"}, "scopes_supported": []string{"orbit", "drop"}, "client_id_metadata_document_supported": true, "authorization_response_iss_parameter_supported": true,
 	})
 }
 

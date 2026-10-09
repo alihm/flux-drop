@@ -28,6 +28,7 @@ func (a *AgentAuth) consentPage(w http.ResponseWriter, status int, p project.Age
 	csp := "default-src 'none'; script-src 'sha256-" + hash(js) + "' https://apis.google.com; style-src 'sha256-" + hash(css) + "'; img-src 'self' data:; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://apis.google.com https://" + auth.AuthDomain + "; frame-src https://" + auth.AuthDomain + "; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
 	w.Header().Set("Content-Security-Policy", csp)
 	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Cross-Origin-Opener-Policy", "same-origin-allow-popups")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -45,11 +46,11 @@ func (a *AgentAuth) consentPage(w http.ResponseWriter, status int, p project.Age
 	}
 	page := template.Must(template.New("consent").Parse(string(html)))
 	_ = page.Execute(w, struct {
-		CSS                                                       template.CSS
-		JS                                                        template.JS
-		Firebase, Handle, CSRF, Name, Domain, RedirectHost, Error string
-		Loopback, Orbit, Drop                                     bool
-	}{template.CSS(css), template.JS(js), string(config), handle, csrf, p.Client.Name, p.Client.Domain, host, message, loopback, agentHasScope(project.AgentGrant{Scopes: p.Scopes}, "orbit"), agentHasScope(project.AgentGrant{Scopes: p.Scopes}, "drop")})
+		CSS                                                               template.CSS
+		JS                                                                template.JS
+		Firebase, Handle, CSRF, Name, Domain, RedirectHost, Error, Origin string
+		Loopback, Orbit, Drop                                             bool
+	}{template.CSS(css), template.JS(js), string(config), handle, csrf, p.Client.Name, p.Client.Domain, host, message, a.Origin, loopback, agentHasScope(project.AgentGrant{Scopes: p.Scopes}, "orbit"), agentHasScope(project.AgentGrant{Scopes: p.Scopes}, "drop")})
 }
 func (a *AgentAuth) renderConsent(w http.ResponseWriter, p project.AgentPending, handle, csrf string) {
 	a.consentPage(w, 200, p, handle, csrf, "")

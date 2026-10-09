@@ -46,6 +46,11 @@ type oauthHarness struct {
 
 func newOAuthHarness(t *testing.T) *oauthHarness {
 	t.Helper()
+	return newOAuthHarnessWithAuthorizeURL(t, "")
+}
+
+func newOAuthHarnessWithAuthorizeURL(t *testing.T, authorizeURL string) *oauthHarness {
+	t.Helper()
 	h := &oauthHarness{t: t}
 	h.clock.Store(time.Now().Unix())
 	key, e := rsa.GenerateKey(rand.Reader, 2048)
@@ -108,7 +113,12 @@ func newOAuthHarness(t *testing.T) *oauthHarness {
 		_, _ = io.Copy(w, r.Body)
 	}))
 	t.Cleanup(upstream.Close)
-	config, e := AgentAuthFromEnv(func(string) string { return "" })
+	config, e := AgentAuthFromEnv(func(key string) string {
+		if key == "DROP_AGENT_AUTHORIZE_URL" {
+			return authorizeURL
+		}
+		return ""
+	})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -270,11 +280,11 @@ func TestAgentOAuthMetadataAndDefaults(t *testing.T) {
 	for _, path := range []string{"/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"} {
 		w := h.request("GET", path, "", "", "", "", nil)
 		m := oauthDecode[map[string]any](t, w)
-		if w.Code != 200 || m["issuer"] != h.auth.Origin || m["authorization_endpoint"] != h.auth.Origin+"/oauth/authorize" || m["client_id_metadata_document_supported"] != true || m["authorization_response_iss_parameter_supported"] != true {
+		if w.Code != 200 || m["issuer"] != h.auth.Origin || m["authorization_endpoint"] != defaultAgentAuthorizeURL || m["client_id_metadata_document_supported"] != true || m["authorization_response_iss_parameter_supported"] != true {
 			t.Fatal(m)
 		}
 	}
-	for _, key := range []string{"DROP_AGENT_AUTH_ENABLED", "DROP_AGENT_RESOURCE", "DROP_AGENT_MCP_UPSTREAM", "DROP_AGENT_RESOURCE_METADATA", "DROP_AGENT_WEBSITE_ORIGINS"} {
+	for _, key := range []string{"DROP_AGENT_AUTH_ENABLED", "DROP_AGENT_RESOURCE", "DROP_AGENT_MCP_UPSTREAM", "DROP_AGENT_RESOURCE_METADATA", "DROP_AGENT_WEBSITE_ORIGINS", "DROP_AGENT_AUTHORIZE_URL"} {
 		_, e := AgentAuthFromEnv(func(k string) string {
 			if k == key {
 				return "invalid"

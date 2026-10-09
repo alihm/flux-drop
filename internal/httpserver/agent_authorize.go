@@ -127,7 +127,7 @@ func (a *AgentAuth) authorize(w http.ResponseWriter, r *http.Request) {
 		fail("invalid_target")
 		return
 	}
-	if err := a.rate(r, "authorize", 60); err != nil {
+	if err := a.rate(r, "authorize", 600); err != nil {
 		if errors.Is(err, session.ErrRateLimited) {
 			w.Header().Set("Retry-After", "60")
 			a.consentError(w, 429, "Too many authorization requests. Try again shortly.")

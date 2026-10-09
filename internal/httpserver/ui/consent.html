@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Connect your agent · Flux Drop</title><style>{{.CSS}}</style></head>
-<body class="consent-body"><main class="consent-shell"><a class="consent-brand" href="/" aria-label="Flux Drop home">FLUX <span>DROP</span></a>
+<body class="consent-body"><main class="consent-shell"><a class="consent-brand" href="{{.Origin}}/" aria-label="Flux Drop home">FLUX <span>DROP</span></a>
 {{if .Error}}<section class="consent-card"><h1>Unable to connect</h1><p role="alert">{{.Error}}</p><p>Return to your agent and start a new connection.</p></section>{{else}}
 <section id="consent" class="consent-card" data-firebase="{{.Firebase}}" data-handle="{{.Handle}}" data-csrf="{{.CSRF}}">
 <p class="kicker">Connect an agent</p><h1>Allow {{.Name}} to use Flux?</h1>
