@@ -87,19 +87,19 @@ var allowedExtensions = map[string]bool{
 // only with a tested Unicode normalization policy.
 func ValidatePath(name string) error {
 	if name == "" || len(name) > 1024 || strings.ContainsAny(name, "\\%:#?\x00") || path.Clean(name) != name || strings.HasPrefix(name, "/") {
-		return fmt.Errorf("%w: unsafe path", ErrInvalid)
+		return fileError(name, "unsafe path")
 	}
 	parts := strings.Split(name, "/")
 	if len(parts) > 20 {
-		return fmt.Errorf("%w: excessive path depth", ErrInvalid)
+		return fileError(name, "excessive path depth")
 	}
 	for _, part := range parts {
 		if len(part) > 200 || !segmentPattern.MatchString(part) || strings.HasSuffix(part, ".") || strings.HasSuffix(part, " ") {
-			return fmt.Errorf("%w: unsupported filename", ErrInvalid)
+			return fileError(name, "unsupported filename")
 		}
 		base := strings.ToUpper(strings.SplitN(part, ".", 2)[0])
 		if base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" || (len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) && base[3] >= '0' && base[3] <= '9') {
-			return fmt.Errorf("%w: reserved filename", ErrInvalid)
+			return fileError(name, "reserved filename")
 		}
 	}
 	return nil
@@ -110,13 +110,16 @@ func validateFile(name string) error {
 		return err
 	}
 	base := strings.ToLower(path.Base(name))
-	if !allowedExtensions[strings.ToLower(path.Ext(name))] {
-		return fmt.Errorf("%w: unsupported file type", ErrInvalid)
+	if ext := strings.ToLower(path.Ext(name)); !allowedExtensions[ext] {
+		if ext == "" {
+			return fileError(name, "unsupported file type (no extension)")
+		}
+		return fileError(name, "unsupported file type ("+ext+")")
 	}
 	// Obvious build/source configuration should never be silently published.
 	for _, forbidden := range []string{"package.json", "package-lock.json", "composer.json", "credentials.json", "service-account.json", "firebase-adminsdk.json", "tsconfig.json"} {
 		if base == forbidden {
-			return fmt.Errorf("%w: source or credential file", ErrInvalid)
+			return fileError(name, "source or credential file")
 		}
 	}
 	return nil
@@ -139,18 +142,21 @@ func StageZIP(parent string, reader io.ReaderAt, size int64, limits Limits) (*St
 		return nil, ErrLimit
 	}
 	sources := make([]Source, 0, len(z.File))
+	issues := &FileErrors{}
 	for _, f := range z.File {
 		if f.Flags&1 != 0 || (f.Method != zip.Store && f.Method != zip.Deflate) {
-			return nil, fmt.Errorf("%w: unsupported ZIP entry", ErrInvalid)
+			issues.add(f.Name, "unsupported ZIP entry (encrypted or compression method)")
+			continue
 		}
 		if f.FileInfo().IsDir() {
 			if err := ValidatePath(strings.TrimSuffix(f.Name, "/")); err != nil {
-				return nil, err
+				issues.add(f.Name, err.(*FileErrors).issues[0].reason)
 			}
 			continue
 		}
 		if !f.Mode().IsRegular() {
-			return nil, fmt.Errorf("%w: non-regular file", ErrInvalid)
+			issues.add(f.Name, "non-regular file")
+			continue
 		}
 		if f.UncompressedSize64 > uint64(limits.ExpandedBytes) {
 			return nil, ErrLimit
@@ -158,7 +164,7 @@ func StageZIP(parent string, reader io.ReaderAt, size int64, limits Limits) (*St
 		entry := f
 		sources = append(sources, Source{Name: f.Name, Open: entry.Open})
 	}
-	return stage(parent, sources, true, limits.ExpandedBytes, limits)
+	return stageWithErrors(parent, sources, true, limits.ExpandedBytes, limits, issues)
 }
 
 // StageFolder accepts paths supplied by a folder picker or multipart upload.
@@ -172,11 +178,18 @@ func StageHTML(parent string, reader io.Reader, limits Limits) (*Staged, error) 
 	return stage(parent, []Source{{Name: "index.html", Open: func() (io.ReadCloser, error) { return io.NopCloser(reader), nil }}}, false, limits.UploadBytes, limits)
 }
 
-func stage(parent string, input []Source, unwrap bool, byteLimit int64, limits Limits) (_ *Staged, err error) {
+func stage(parent string, input []Source, unwrap bool, byteLimit int64, limits Limits) (*Staged, error) {
+	return stageWithErrors(parent, input, unwrap, byteLimit, limits, &FileErrors{})
+}
+
+func stageWithErrors(parent string, input []Source, unwrap bool, byteLimit int64, limits Limits, issues *FileErrors) (_ *Staged, err error) {
 	if err := limits.Validate(); err != nil {
 		return nil, err
 	}
 	if len(input) == 0 {
+		if len(issues.issues) != 0 {
+			return nil, issues
+		}
 		return nil, fmt.Errorf("%w: empty project", ErrInvalid)
 	}
 	if len(input) > limits.Files {
@@ -185,15 +198,24 @@ func stage(parent string, input []Source, unwrap bool, byteLimit int64, limits L
 	if byteLimit > limits.ExpandedBytes {
 		byteLimit = limits.ExpandedBytes
 	}
-	sources := append([]Source(nil), input...)
-	for _, src := range sources {
+	sources := make([]Source, 0, len(input))
+	for _, src := range input {
 		if err := validateFile(src.Name); err != nil {
-			return nil, err
+			issues.merge(err)
+			continue
 		}
 		if src.Open == nil {
-			return nil, fmt.Errorf("%w: missing file reader", ErrInvalid)
+			issues.add(src.Name, "missing file reader")
+			continue
 		}
+		sources = append(sources, src)
 	}
+	if len(sources) == 0 {
+		return nil, issues
+	}
+	// Unsafe names are excluded from structural checks, but all remaining names
+	// are checked for collisions before opening sources or creating any files.
+	originals := append([]Source(nil), sources...)
 	if unwrap {
 		hasIndex := false
 		for _, src := range sources {
@@ -219,6 +241,10 @@ func stage(parent string, input []Source, unwrap bool, byteLimit int64, limits L
 			}
 		}
 	}
+	originalNames := make(map[string]string, len(sources))
+	for i, src := range sources {
+		originalNames[src.Name] = originals[i].Name
+	}
 	sort.Slice(sources, func(i, j int) bool { return sources[i].Name < sources[j].Name })
 	seen := make(map[string]bool)
 	spellings := make(map[string]string)
@@ -227,25 +253,28 @@ func stage(parent string, input []Source, unwrap bool, byteLimit int64, limits L
 		for part := src.Name; part != "."; part = path.Dir(part) {
 			folded := strings.ToLower(part)
 			if previous, exists := spellings[folded]; exists && previous != part {
-				return nil, fmt.Errorf("%w: inconsistent path casing", ErrInvalid)
+				issues.add(originalNames[src.Name], fmt.Sprintf("inconsistent path casing (conflicts with %q)", previous))
 			}
 			spellings[folded] = part
 		}
 		key := strings.ToLower(src.Name)
 		if seen[key] {
-			return nil, fmt.Errorf("%w: duplicate filename", ErrInvalid)
+			issues.add(originalNames[src.Name], "duplicate filename")
 		}
 		seen[key] = true
 		if src.Name == "index.html" {
 			index = true
 		}
 	}
-	for name := range seen {
-		for ancestor := path.Dir(name); ancestor != "."; ancestor = path.Dir(ancestor) {
+	for _, src := range sources {
+		for ancestor := path.Dir(strings.ToLower(src.Name)); ancestor != "."; ancestor = path.Dir(ancestor) {
 			if seen[ancestor] {
-				return nil, fmt.Errorf("%w: file/directory conflict", ErrInvalid)
+				issues.add(originalNames[src.Name], fmt.Sprintf("file/directory conflict (ancestor %q is a file)", ancestor))
 			}
 		}
+	}
+	if len(issues.issues) != 0 {
+		return nil, issues
 	}
 	if !index {
 		return nil, fmt.Errorf("%w: root index.html required", ErrInvalid)
@@ -301,7 +330,7 @@ func writeSource(root string, src Source, remaining int64) (File, error) {
 	n, copyErr := io.Copy(io.MultiWriter(out, hash), io.LimitReader(in, remaining+1))
 	closeErr := out.Close()
 	if copyErr != nil {
-		return File{}, fmt.Errorf("%w: file read failed: %w", ErrInvalid, copyErr)
+		return File{}, fmt.Errorf("%w: %w", fileError(src.Name, "file read failed"), copyErr)
 	}
 	if closeErr != nil {
 		return File{}, closeErr

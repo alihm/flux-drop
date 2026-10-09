@@ -574,6 +574,11 @@ func projectError(w http.ResponseWriter, err error) {
 	case errors.Is(err, content.ErrLimit), errors.As(err, &tooLarge):
 		respond(w, 413, map[string]string{"error": "upload_limit"})
 	case errors.Is(err, content.ErrInvalid), errors.Is(err, project.ErrInvalid):
+		var files *content.FileErrors
+		if errors.As(err, &files) {
+			respond(w, 400, map[string]any{"error": "invalid_project", "message": files.Error(), "files": files.Paths()})
+			return
+		}
 		respond(w, 400, map[string]string{"error": "invalid_project"})
 	default:
 		sessionError(w, err)
@@ -606,9 +611,6 @@ func stageRequest(w http.ResponseWriter, r *http.Request, parent string, limits 
 	}
 	var parts []part
 	spool := func(name string, reader io.Reader) error {
-		if err := content.ValidatePath(name); err != nil {
-			return err
-		}
 		if len(parts) >= limits.Files {
 			return content.ErrLimit
 		}
@@ -659,6 +661,12 @@ func stageRequest(w http.ResponseWriter, r *http.Request, parent string, limits 
 		}
 	}
 	if len(parts) == 1 {
+		// Multipart names are spooled under generated names, never as filesystem
+		// paths. Folder validation below can therefore report every bad filename.
+		// Validate single-file names before ZIP/HTML special handling as well.
+		if err := content.ValidatePath(parts[0].name); err != nil {
+			return nil, err
+		}
 		file, err := os.Open(parts[0].path)
 		if err != nil {
 			return nil, err

@@ -49,6 +49,19 @@ test('empty state and session failure explain why publishing is disabled',async(
   await expect(page.getByRole('button',{name:'Publish site'})).toBeDisabled();
 });
 
+test('upload errors show every offending filename as plain text', async ({page}) => {
+  await setup(page);
+  const files = ['assets/app.js.map', '.env', 'CNAME', '<img src=x onerror=alert(1)>.js'];
+  const message = 'invalid static upload: ' + files.map(name => `unsupported file: "${name}"`).join('; ');
+  await page.route('**/api/projects?name=*', route => route.fulfill({status: 400, json: {error: 'invalid_project', message, files}}));
+  await page.goto('/');
+  await expect(page.locator('#status')).toContainText('Choose a site');
+  await page.locator('#files').setInputFiles({name: 'site.zip', mimeType: 'application/zip', buffer: Buffer.from('ZIP fixture')});
+  await page.getByRole('button', {name: 'Publish site'}).click();
+  await expect(page.locator('#status')).toHaveText(message);
+  await expect(page.locator('#status img')).toHaveCount(0);
+});
+
 test('selection validates the site entry point before uploading',async({page})=>{
   await setup(page);await page.goto('/');
   await page.locator('#files').setInputFiles({name:'style.css',mimeType:'text/css',buffer:Buffer.from('body{}')});

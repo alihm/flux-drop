@@ -60,6 +60,19 @@ test('content replacement keeps its idempotency key across an unchanged retry',a
   await page.getByRole('button',{name:'Replace content',exact:true}).click();await expect(page.locator('#manage-dialog')).toBeHidden();expect(calls).toBe(2);
 });
 
+test('content replacement displays file validation diagnostics', async ({page}) => {
+  await setup(page);
+  page.on('dialog', dialog => dialog.accept());
+  const files = ['assets/app.js.map', '.env', 'CNAME'];
+  const message = 'invalid static upload: ' + files.map(name => `unsupported file: "${name}"`).join('; ');
+  await page.route(`**/api/projects/${id}/versions`, route => route.fulfill({status: 400, json: {error: 'invalid_project', message, files}}));
+  await open(page);
+  await page.getByLabel('Replacement HTML, ZIP, or files').setInputFiles({name: 'site.zip', mimeType: 'application/zip', buffer: Buffer.from('ZIP fixture')});
+  await page.getByRole('button', {name: 'Replace content', exact: true}).click();
+  await expect(page.locator('.management-status')).toHaveText(message);
+  await expect(page.getByRole('button', {name: 'Replace content', exact: true})).toBeEnabled();
+});
+
  test('clean names and watermark preference work in Manage',async({page})=>{
   const state=await setup(page);state.project.slug='site-abcdef';state.project.initialSuffix='';
   let calls=0;

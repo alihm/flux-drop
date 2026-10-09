@@ -690,6 +690,7 @@
   }
 
   function publishError(code, data) {
+    if (data.error === 'invalid_project' && typeof data.message === 'string' && Array.isArray(data.files)) return data.message;
     if (code === 413) return 'The upload is too large, including ZIP or form packaging.';
     if (code === 429) return 'Too many requests. Wait a moment and retry.';
     if (code === 409) return data.error === 'name_conflict' ? 'That name is in use. Choose another.' : 'The name, quota, or site state conflicts. Check your sites before retrying.';
@@ -1106,6 +1107,7 @@
         }
         if (response.status < 200 || response.status >= 300) {
           if (response.status === 409 || response.status === 404) { stale = true; throw new Error('This site changed. Close settings and refresh your sites.'); }
+          if (body instanceof FormData && response.data.error === 'invalid_project' && typeof response.data.message === 'string' && Array.isArray(response.data.files)) throw new Error(response.data.message);
           throw new Error(response.status === 400 ? 'Check your input and try again.' : 'The result could not be confirmed. Refresh your sites before retrying.');
         }
         dialog.close();
