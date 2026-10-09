@@ -396,6 +396,9 @@ Firebase refresh tokens and optional ticket passwords use AES-256-GCM with fresh
 random nonces and record-bound associated data. The encryption key uses HKDF
 SHA-256 over `DROP_CLUSTER_PASSPHRASE`, info `flux-agent-grants-v1`. Modes without
 that secret create a random 256-bit key once in replicated **private** state.
+Initialization waits up to one minute for the local coordinator and cluster
+election. After an uncertain initialization result it reads the authoritative
+key again; it never replaces an existing key.
 Protect Raft state/cluster backups as credentials. Changing the passphrase/key
 invalidates previously encrypted connections; plan to disconnect/reconnect them.
 No token/secret/body/query/path is added to production access logs.

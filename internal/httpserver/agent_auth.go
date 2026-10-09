@@ -112,18 +112,8 @@ func NewAgentAuth(ctx context.Context, c AgentAuthConfig, origin, secret string,
 			return nil, err
 		}
 	} else {
-		candidate := make([]byte, 32)
-		if _, err := rand.Read(candidate); err != nil {
-			return nil, err
-		}
-		err := repo.AgentTransaction(ctx, func(tx *metadata.Tx) error {
-			err := tx.Get("agent_private/encryption-v1", &key)
-			if errors.Is(err, metadata.ErrNotFound) {
-				key = candidate
-				return tx.Create("agent_private/encryption-v1", key)
-			}
-			return err
-		})
+		var err error
+		key, err = agentPrivateEncryptionKey(ctx, repo)
 		if err != nil {
 			return nil, err
 		}
@@ -139,6 +129,43 @@ func NewAgentAuth(ctx context.Context, c AgentAuthConfig, origin, secret string,
 	a.cimdClient = newAgentMetadataClient()
 	return a, nil
 }
+
+func agentPrivateEncryptionKey(ctx context.Context, repo *project.RaftRepository) ([]byte, error) {
+	// The supervisor starts HTTP and the coordinator together. A deployment
+	// without a passphrase must wait for the coordinator and its first election
+	// before initializing the replicated key, rather than crash at every start.
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	candidate := make([]byte, 32)
+	if _, err := rand.Read(candidate); err != nil {
+		return nil, err
+	}
+	for {
+		var key []byte
+		err := repo.AgentTransaction(ctx, func(tx *metadata.Tx) error {
+			err := tx.Get("agent_private/encryption-v1", &key)
+			if errors.Is(err, metadata.ErrNotFound) {
+				key = candidate
+				return tx.Create("agent_private/encryption-v1", key)
+			}
+			return err
+		})
+		if err == nil {
+			return key, nil
+		}
+		// This initialization is explicitly convergent: after an ambiguous
+		// commit, re-read the authoritative key and never overwrite it. Do not
+		// apply this retry policy to ordinary OAuth or project mutations.
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 func agentRandom() string {
 	var b [32]byte
 	if _, err := rand.Read(b[:]); err != nil {

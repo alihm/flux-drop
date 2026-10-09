@@ -56,11 +56,13 @@ func main() {
 		members = append(members, member{id, fmt.Sprintf("172.29.188.%d:8445", 11+i)})
 	}
 	for i, id := range ids {
-		root := "/state-" + id
+		mount := "/state-" + id
+		directory(mount)
+		// Match cluster.StateDirectory: private state lives below the Flux mount.
+		root := mount + "/private"
 		directory(root)
-		directory("/state-" + id)
 		write(root+"/cluster-ca.json", bundle)
-		manifest := map[string]any{"app": "drop", "clusterID": "1234567890abcdef1234567890abcdef", "local": members[i], "stateDir": "/var/lib/drop-cluster", "contentDir": "/data", "listen": "0.0.0.0:8445", "statusListen": "0.0.0.0:8446", "statusPort": 8446, "selfIPs": []string{fmt.Sprintf("172.29.188.%d", 11+i)}, "caBundleFile": "/var/lib/drop-cluster/cluster-ca.json", "initialVoters": members, "asyncContent": true}
+		manifest := map[string]any{"app": "drop", "clusterID": "1234567890abcdef1234567890abcdef", "local": members[i], "stateDir": "/var/lib/drop-cluster/private", "contentDir": "/data", "listen": "0.0.0.0:8445", "statusListen": "0.0.0.0:8446", "statusPort": 8446, "selfIPs": []string{fmt.Sprintf("172.29.188.%d", 11+i)}, "caBundleFile": "/var/lib/drop-cluster/private/cluster-ca.json", "initialVoters": members, "asyncContent": true}
 		data, err := json.Marshal(manifest)
 		must(err)
 		write(root+"/cluster-node.json", data)
