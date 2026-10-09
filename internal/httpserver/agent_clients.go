@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -70,6 +71,25 @@ func agentRedirectMatches(registered, candidate string) bool {
 	b.Host = b.Hostname()
 	return a.String() == b.String()
 }
+
+// Clients can advertise flows this server does not implement. Negotiate the
+// supported subset, while requiring the authorization-code flow when specified.
+func agentNormalizeClientTypes(c *project.AgentClient) bool {
+	if len(c.GrantTypes) > 0 && !slices.Contains(c.GrantTypes, "authorization_code") {
+		return false
+	}
+	if len(c.ResponseTypes) > 0 && !slices.Contains(c.ResponseTypes, "code") {
+		return false
+	}
+	refresh := len(c.GrantTypes) == 0 || slices.Contains(c.GrantTypes, "refresh_token")
+	c.GrantTypes = []string{"authorization_code"}
+	if refresh {
+		c.GrantTypes = append(c.GrantTypes, "refresh_token")
+	}
+	c.ResponseTypes = []string{"code"}
+	return true
+}
+
 func agentClientValid(c project.AgentClient) bool {
 	if len(c.RedirectURIs) == 0 || len(c.RedirectURIs) > 20 || len(c.Name) > 200 || !utf8.ValidString(c.Name) || len(c.URI) > 2048 || len(c.Logo) > 2048 {
 		return false
@@ -158,7 +178,7 @@ func (a *AgentAuth) registerClient(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
 	var c project.AgentClient
 	d := json.NewDecoder(r.Body)
-	if d.Decode(&c) != nil || d.Decode(new(any)) != io.EOF || !agentClientValid(c) {
+	if d.Decode(&c) != nil || d.Decode(new(any)) != io.EOF || !agentNormalizeClientTypes(&c) || !agentClientValid(c) {
 		agentError(w, 400, "invalid_client_metadata", "Public client with valid redirect_uris required")
 		return
 	}
@@ -168,8 +188,6 @@ func (a *AgentAuth) registerClient(w http.ResponseWriter, r *http.Request) {
 	c.AuthMethod = "none"
 	c.IssuedAt = a.now().Unix()
 	c.ExpiresAt = a.now().Add(90 * 24 * time.Hour)
-	c.ResponseTypes = []string{"code"}
-	c.GrantTypes = []string{"authorization_code", "refresh_token"}
 	if c.Name == "" {
 		c.Name = "MCP client"
 	}
@@ -224,7 +242,7 @@ func (a *AgentAuth) metadataClient(ctx context.Context, id string) (project.Agen
 	}
 	data, e := io.ReadAll(io.LimitReader(resp.Body, 32<<10+1))
 	var c project.AgentClient
-	if e != nil || len(data) > 32<<10 || json.Unmarshal(data, &c) != nil || c.ID != id || !agentClientValid(c) {
+	if e != nil || len(data) > 32<<10 || json.Unmarshal(data, &c) != nil || c.ID != id || !agentNormalizeClientTypes(&c) || !agentClientValid(c) {
 		return c, project.ErrInvalid
 	}
 	c.Domain = u.Hostname()

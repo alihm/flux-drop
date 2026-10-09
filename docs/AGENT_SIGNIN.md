@@ -99,9 +99,12 @@ not advertise `openid` scope. Firebase remains the identity provider.
 ```
 
 Only `redirect_uris` is required. `token_endpoint_auth_method` defaults to `none`.
-Optional `response_types` may contain only `code`; optional `grant_types` may
-contain `authorization_code` and/or `refresh_token`. Unrecognized RFC 7591
-extension metadata is ignored. Client-supplied IDs/lifetimes are overwritten.
+Empty or missing `grant_types` defaults to `authorization_code` and `refresh_token`;
+empty or missing `response_types` defaults to `code`. Registration responses and
+stored metadata contain only the supported types requested, or those defaults.
+Unsupported grant and response types are ignored; a client must support authorization_code and code.
+Unrecognized RFC 7591 extension metadata is ignored. Client-supplied IDs/lifetimes
+are overwritten.
 
 201 JSON (optional URI/logo fields omitted if not supplied):
 
