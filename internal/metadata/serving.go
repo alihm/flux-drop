@@ -37,7 +37,10 @@ func newServingState() *servingState {
 	return &servingState{slots: make(chan struct{}, 64), callers: make(chan struct{}, 256), flights: map[string]*confirmation{}, negative: map[string]*list.Element{}, lru: list.New()}
 }
 
-type frozenBackend struct{ records map[string]kv.Record }
+type frozenBackend struct {
+	records   map[string]kv.Record
+	validator Backend
+}
 
 func (b frozenBackend) Read(_ context.Context, keys []string) (map[string]kv.Record, error) {
 	out := map[string]kv.Record{}
@@ -50,7 +53,12 @@ func (b frozenBackend) Read(_ context.Context, keys []string) (map[string]kv.Rec
 	}
 	return out, nil
 }
-func (b frozenBackend) Check(context.Context, []kv.Check) error      { return nil }
+func (b frozenBackend) Check(ctx context.Context, checks []kv.Check) error {
+	if b.validator != nil {
+		return b.validator.Check(ctx, checks)
+	}
+	return nil
+}
 func (b frozenBackend) Commit(context.Context, kv.Transaction) error { return kv.ErrInvalid }
 func (b frozenBackend) CoherentSnapshot() bool                       { return true }
 
@@ -202,7 +210,16 @@ func (s *Store) RunServing(ctx context.Context, key string, negative, validate b
 	}
 	// Each caller reruns its own callback. Shared work shares records, never a
 	// successful authorization result or a descriptor with another user's offsets.
-	return (&Store{Backend: frozenBackend{flight.records}}).RunSnapshot(ctx, fn)
+	replay := &Store{Backend: frozenBackend{records: flight.records}}
+	// The confirmation callback may perform IO, and every replay performs its own
+	// IO too. Validate each caller against the leader that supplied these records;
+	// a frozen read set alone cannot detect a policy change during replay. This
+	// extra leader check is restricted to the missing-record preview fallback.
+	if validate {
+		replay.Backend = frozenBackend{records: flight.records, validator: s.Backend}
+		return replay.Run(ctx, fn)
+	}
+	return replay.RunSnapshot(ctx, fn)
 }
 
 func (s *Store) ServingMetrics() map[string]uint64 {

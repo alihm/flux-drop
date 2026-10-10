@@ -117,3 +117,35 @@ func TestServingConfirmationSharingCapAndNegativeTTL(t *testing.T) {
 		<-s.serving.slots
 	}
 }
+
+func TestMissingPreviewConfirmationValidatesEachCallersIO(t *testing.T) {
+	ctx := context.Background()
+	leader := &testmetadata.Backend{}
+	base := &Store{Backend: leader}
+	if e := base.Run(ctx, func(tx *Tx) error { return tx.Set("tests/preview", "public") }); e != nil {
+		t.Fatal(e)
+	}
+	b := &localTestBackend{Backend: leader, local: &testmetadata.Backend{}}
+	s := &Store{Backend: b}
+	calls := 0
+	denied := errors.New("private")
+	err := s.RunServing(ctx, "preview:race", false, true, func(tx *Tx) error {
+		var value string
+		if e := tx.Get("tests/preview", &value); e != nil {
+			return e
+		}
+		calls++
+		if value != "public" {
+			return denied
+		}
+		// First successful callback is the checked leader confirmation. Second is
+		// this caller's replay/IO; a concurrent policy change must invalidate it too.
+		if calls == 2 {
+			return base.Run(ctx, func(other *Tx) error { return other.Set("tests/preview", "private") })
+		}
+		return nil
+	})
+	if err == nil {
+		t.Fatal("post-confirmation IO bypassed final validation")
+	}
+}

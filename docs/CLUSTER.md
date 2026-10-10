@@ -290,7 +290,9 @@ missing public slugs have a bounded 1024-entry, one-second negative LRU. Exhaust
 fails closed with 404/denial; transport failures are never negatively cached.
 Aggregate maximum confirmation concurrency is 64 times the number of primaries.
 Public project resolution takes two loopback snapshot RPCs (slug then project),
-with no final Check RPC. Preview IO retains final snapshot validation. Private
+with no final Check RPC. Preview IO retains final snapshot validation. When a
+preview requires missing-record leader confirmation, each caller also validates
+its replayed IO against that leader; ordinary local preview IO stays local. Private
 access additionally reads session and a coherent session/grant/project snapshot.
 
 The authenticated local_snapshot RPC always targets the local coordinator, follows
