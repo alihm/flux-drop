@@ -64,6 +64,7 @@ type state struct {
 	records        map[string]Record
 	bytes          int
 	index          uint64
+	generation     uint64
 	versionCeiling uint64
 	historyDigest  string
 }
@@ -220,6 +221,7 @@ func (s *state) Restore(reader io.ReadCloser) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.generation++
 	s.records, s.index, s.bytes = copy.Records, copy.Index, size
 	s.versionCeiling = copy.VersionCeiling
 	s.historyDigest = copy.HistoryDigest

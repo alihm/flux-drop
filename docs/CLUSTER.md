@@ -271,3 +271,32 @@ the source production path):
   disable/revocation instantly. Authentication is bounded by token expiry.
 - End-to-end publishing/private-access tests across leader loss and replacements,
   then a new verified Docker image. The currently published image is unchanged.
+
+### Explicit eventual serving reads
+
+Site delivery, its post-fetch checks, thumbnails, private serving session/grant
+reads and Explore use the local coordinator's coherent applied snapshot. There
+is deliberately no replication-age limit: disconnected followers may serve old
+public policy/digests or keep denying newly allowed access indefinitely. Known
+expiry timestamps are still checked against the current clock. Management reads,
+unlock creation, all security changes and writes retain their leader/CAS paths.
+Leaders retain async-view authority requirements; unusable local coordinators
+return 503 with Retry-After rather than falling back globally.
+
+Only absent required records trigger a complete logical leader lookup, bounded
+per primary to 64 active distinct confirmations and 256 waiting callers. Equivalent
+lookups share records; authorization callbacks run separately per caller. Confirmed
+missing public slugs have a bounded 1024-entry, one-second negative LRU. Exhaustion
+fails closed with 404/denial; transport failures are never negatively cached.
+Aggregate maximum confirmation concurrency is 64 times the number of primaries.
+Public project resolution takes two loopback snapshot RPCs (slug then project),
+with no final Check RPC. Preview IO retains final snapshot validation. Private
+access additionally reads session and a coherent session/grant/project snapshot.
+
+The authenticated local_snapshot RPC always targets the local coordinator, follows
+no leader hints and cannot update cached leader routing. Stamps include process
+identity, view kind, term, applied index and restore generation. Dependent reads
+retry the whole lookup on conflict. Upgrade coordinators before HTTP processes:
+older coordinators reject this RPC, producing clear serving unavailability; there
+is no silent global fallback. Public browser and Explore caches have independent
+TTL windows, in addition to unbounded local metadata replication delays.

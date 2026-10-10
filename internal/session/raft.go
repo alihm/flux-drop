@@ -95,3 +95,15 @@ func (s *RaftStore) Rotate(ctx context.Context, oldDigest, newDigest, expectedCS
 }
 
 var _ Store = (*RaftStore)(nil)
+
+func (s *RaftStore) GetForServing(ctx context.Context, digest string) (Record, error) {
+	if !sessionKey.MatchString(digest) {
+		return Record{}, ErrUnauthorized
+	}
+	var record Record
+	err := s.Store.RunServing(ctx, "session:"+digest, false, false, func(tx *metadata.Tx) error { return tx.Get("sessions/"+digest, &record) })
+	if errors.Is(err, metadata.ErrNotFound) {
+		err = ErrUnauthorized
+	}
+	return record, err
+}

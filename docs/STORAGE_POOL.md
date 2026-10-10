@@ -24,7 +24,7 @@ runtime; storage-pool settings without a role are rejected.
 - A directory arriving through Syncthing is not automatically a ready version.
   Reads verify the manifest and actual content. Failed or partial replicas are
   skipped; unavailable content returns 503, never an older version.
-- Each read checks current primary metadata/access policy before using cached
+- Each read checks locally replicated primary serving metadata/access policy before using cached
   bytes, and rechecks authority, policy, version and any private grant immediately
   before responding after a cache verification or remote fetch. Private hosting retains the existing self-contained HTML restriction.
 - Operations are idempotent. Lost responses may have succeeded: retry the same
@@ -75,7 +75,7 @@ r:/data|ml:state:/var/lib/drop-cluster
 The primary's `/data` holds small replicated deployment/password records; full
 project versions are remote. Raft state, staging, and cache stay in the private
 child of the nonreplicated state mount. The default primary requires its existing
-upload staging headroom, plus the configured cache and up to four concurrent
+upload staging headroom, plus the configured cache and bounded concurrent
 200 MiB response spools. Provision several GiB of node-local writable space.
 Both directories must be actual dedicated persistent mounts. See
 [FLUX_DEPLOYMENT.md](FLUX_DEPLOYMENT.md) for the existing primary coordinator's
@@ -88,7 +88,7 @@ listener on 34444. Do not expose loopback Go port 8081.
 
 Primary `/readyz` requires local storage, metadata authority, and a currently
 writable secondary offer. `/healthz` remains liveness. Reads can still use a
-verified cache under current metadata authority during a secondary outage.
+verified cache under local serving metadata during a secondary outage.
 
 ## Secondary deployment
 

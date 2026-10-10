@@ -38,7 +38,7 @@ func registerPreviews(mux *http.ServeMux, deps Dependencies) {
 		var data []byte
 		pending := false
 		p, err := measure(r, "metadata", func() (project.Project, error) {
-			return deps.Previews.ReadProject(ctx, r.PathValue("id"), func(p project.Project) error {
+			return deps.Previews.ReadProjectForServing(ctx, r.PathValue("id"), func(p project.Project) error {
 				data = nil
 				pending = false
 				if p.Private {
@@ -49,7 +49,7 @@ func registerPreviews(mux *http.ServeMux, deps Dependencies) {
 					if e != nil {
 						return project.ErrNotFound
 					}
-					view, e := deps.Sessions.Read(ctx, token)
+					view, e := deps.Sessions.ReadForServing(ctx, token)
 					if e != nil {
 						return project.ErrNotFound
 					}
@@ -57,7 +57,7 @@ func registerPreviews(mux *http.ServeMux, deps Dependencies) {
 					if e != nil {
 						return project.ErrNotFound
 					}
-					owned, e := deps.Projects.Repository.GetOwned(ctx, actor, p.ID)
+					owned, e := ownedForServing(ctx, deps.Projects.Repository, actor, p.ID)
 					if e != nil || owned.PolicyRevision != p.PolicyRevision {
 						return project.ErrNotFound
 					}
@@ -137,4 +137,13 @@ func registerPreviews(mux *http.ServeMux, deps Dependencies) {
 			_, _ = w.Write(data)
 		}
 	})
+}
+
+func ownedForServing(ctx context.Context, repo project.Repository, a project.Actor, id string) (project.Project, error) {
+	if serving, ok := repo.(interface {
+		GetOwnedForServing(context.Context, project.Actor, string) (project.Project, error)
+	}); ok {
+		return serving.GetOwnedForServing(ctx, a, id)
+	}
+	return repo.GetOwned(ctx, a, id)
 }

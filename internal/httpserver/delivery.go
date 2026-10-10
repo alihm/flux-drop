@@ -69,7 +69,7 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
-		p, err := measure(r, "metadata", func() (project.Project, error) { return repository.Resolve(ctx, slug) })
+		p, err := measure(r, "metadata", func() (project.Project, error) { return resolveForServing(ctx, repository, slug) })
 		if err != nil {
 			if errors.Is(err, project.ErrNotFound) {
 				http.NotFound(w, r)
@@ -82,9 +82,16 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 			http.NotFound(w, r)
 			return
 		}
+		var accessErr error
+		r = r.WithContext(context.WithValue(r.Context(), privateAccessErrorKey{}, &accessErr))
 		allowed := false
 		if p.Private && privateAccess != nil {
 			allowed, _ = measure(r, "metadata", func() (bool, error) { return privateAccess(r.WithContext(ctx), p), nil })
+		}
+		if accessErr != nil {
+			w.Header().Set("Retry-After", "5")
+			w.WriteHeader(503)
+			return
 		}
 		if p.Private && (!allowed || (file != "" && file != "index.html")) {
 			if privateAccess != nil && p.Slug == slug && (file == "" || file == "index.html") && r.Header.Get("Sec-Fetch-Mode") == "navigate" && r.Header.Get("Sec-Fetch-Dest") == "document" {
@@ -123,7 +130,7 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 				if remote, ok := fallback.(AuthorizedProjectFallback); ok {
 					_, _ = measure(r, "file", func() (bool, error) {
 						remote.ServeAuthorizedProject(w, r, p, file, func(ctx context.Context) error {
-							current, err := measure(r, "metadata", func() (project.Project, error) { return repository.Resolve(ctx, slug) })
+							current, err := measure(r, "metadata", func() (project.Project, error) { return resolveForServing(ctx, repository, slug) })
 							if err != nil {
 								return err
 							}
@@ -134,6 +141,9 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 								return project.ErrStorage
 							}
 							if current.Private && (privateAccess == nil || !privateAccess(r.WithContext(ctx), current)) {
+								if accessErr != nil {
+									return accessErr
+								}
 								return project.ErrNotFound
 							}
 							return nil
@@ -209,4 +219,13 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 func remotePrivateFallback(fallback ProjectFallback) bool {
 	remote, ok := fallback.(AuthorizedProjectFallback)
 	return ok && remote.RemotePrivateContent()
+}
+
+func resolveForServing(ctx context.Context, repo projectResolver, slug string) (project.Project, error) {
+	if serving, ok := repo.(interface {
+		ResolveForServing(context.Context, string) (project.Project, error)
+	}); ok {
+		return serving.ResolveForServing(ctx, slug)
+	}
+	return repo.Resolve(ctx, slug)
 }

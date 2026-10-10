@@ -43,7 +43,7 @@ func (s *Service) CachedExplore(ctx context.Context) ([]Card, error) {
 			}
 			generation := s.exploreGeneration
 			s.exploreMu.Unlock()
-			rows, err := s.Explore(bounded)
+			rows, err := s.ExploreForServing(bounded)
 			if err != nil {
 				return nil, err
 			}

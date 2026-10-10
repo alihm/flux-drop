@@ -10,8 +10,10 @@ import (
 )
 
 type readStamp struct {
-	Term  uint64 `json:"term"`
-	Index uint64 `json:"index"`
+	Epoch      string `json:"epoch,omitempty"`
+	Generation uint64 `json:"generation,omitempty"`
+	Term       uint64 `json:"term"`
+	Index      uint64 `json:"index"`
 }
 type snapshotReader interface {
 	readSnapshot(context.Context, []string, *readStamp) (map[string]Record, *readStamp, error)
@@ -21,6 +23,7 @@ type transactionBackend struct {
 	reader snapshotReader
 	stamp  *readStamp
 	legacy bool
+	local  bool
 }
 
 func (n *Node) TransactionBackend() metadata.Backend {
@@ -36,7 +39,7 @@ func (b *transactionBackend) Read(ctx context.Context, keys []string) (map[strin
 	r, stamp, err := b.reader.readSnapshot(ctx, keys, b.stamp)
 	// Rolling upgrades may route to an older leader. Fail back to its original
 	// fenced protocol only before this transaction has read any snapshot bytes.
-	if b.stamp == nil && errors.Is(err, ErrInvalid) {
+	if !b.local && b.stamp == nil && errors.Is(err, ErrInvalid) {
 		b.legacy = true
 		return b.Backend.Read(ctx, keys)
 	}
@@ -132,3 +135,81 @@ func (c *Client) readSnapshot(ctx context.Context, keys []string, stamp *readSta
 }
 
 func (b *transactionBackend) CoherentSnapshot() bool { return !b.legacy && b.stamp != nil }
+
+// Local snapshots deliberately have no replication-age gate. Applied follower
+// state may remain stale indefinitely. Leaders must retain their speculative
+// view authority rules; an unusable leader must not masquerade as a follower.
+// Epoch includes process identity, view kind, term and restore generation, so
+// restart/restore/election cannot validate an incompatible dependent read.
+func (n *Node) localSnapshot(ctx context.Context, keys []string, stamp *readStamp) (map[string]Record, *readStamp, error) {
+	if len(keys) > maxChanges || len(keys) == 0 && stamp == nil {
+		return nil, nil, ErrInvalid
+	}
+	for _, key := range keys {
+		if !documentKey.MatchString(key) {
+			return nil, nil, ErrInvalid
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if n.raft.State() == raft.Shutdown {
+		return nil, nil, ErrNotLeader
+	}
+	epoch := n.localEpoch
+	if n.raft.State() == raft.Leader {
+		var base *readStamp
+		if stamp != nil {
+			copy := *stamp
+			copy.Epoch = ""
+			copy.Generation = 0
+			base = &copy
+		}
+		records, current, err := n.readSnapshot(ctx, keys, base)
+		if err != nil {
+			return nil, nil, err
+		}
+		n.state.mu.RLock()
+		current.Generation = n.state.generation
+		n.state.mu.RUnlock()
+		current.Epoch = epoch + "/leader"
+		if stamp != nil && *stamp != *current {
+			return nil, nil, ErrConflict
+		}
+		return records, current, nil
+	}
+	n.state.mu.RLock()
+	defer n.state.mu.RUnlock()
+	if n.raft.State() == raft.Leader {
+		return nil, nil, ErrConflict
+	}
+	current := &readStamp{Epoch: epoch + "/applied", Generation: n.state.generation, Term: n.raft.CurrentTerm(), Index: n.state.index}
+	if stamp != nil && *stamp != *current {
+		return nil, nil, ErrConflict
+	}
+	return copyRecords(n.state.records, keys), current, nil
+}
+
+type localReader struct {
+	node   *Node
+	client *Client
+}
+
+func (r localReader) readSnapshot(ctx context.Context, keys []string, stamp *readStamp) (map[string]Record, *readStamp, error) {
+	if r.node != nil {
+		return r.node.localSnapshot(ctx, keys, stamp)
+	}
+	result, err := r.client.call(ctx, rpcRequest{Method: "local_snapshot", Keys: keys, Stamp: stamp})
+	return result.Records, result.Stamp, err
+}
+
+type localBackend struct {
+	metadata.Backend
+	reader localReader
+}
+
+func (b localBackend) TransactionBackend() metadata.Backend {
+	return &transactionBackend{Backend: b.Backend, reader: b.reader, local: true}
+}
+func (n *Node) ServingBackend() metadata.Backend   { return localBackend{n, localReader{node: n}} }
+func (c *Client) ServingBackend() metadata.Backend { return localBackend{c, localReader{client: c}} }

@@ -199,3 +199,11 @@ func (s *RaftRepository) ListOwned(ctx context.Context, a Actor, cursor string, 
 
 var _ Repository = (*RaftRepository)(nil)
 var _ UnlockRepository = (*RaftRepository)(nil)
+
+func (s *RaftRepository) runServing(ctx context.Context, key string, negative bool, fn func(context.Context, *raftTx) error) error {
+	err := s.Store.RunServing(ctx, key, negative, false, func(tx *metadata.Tx) error { return fn(ctx, &raftTx{tx}) })
+	if errors.Is(err, metadata.ErrNotFound) {
+		return ErrNotFound
+	}
+	return err
+}

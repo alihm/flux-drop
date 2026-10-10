@@ -68,7 +68,7 @@ func (n *Node) rpcHandler(w http.ResponseWriter, r *http.Request, app string) {
 		return
 	}
 	// Followers return only an authenticated routing hint, never cached data.
-	if n.raft.State() != raft.Leader {
+	if n.raft.State() != raft.Leader && request.Method != "local_snapshot" {
 		response := rpcResponse{Error: "not_leader"}
 		address, _ := n.raft.LeaderWithID()
 		if member, e := parseAddress(string(address)); e == nil {
@@ -82,11 +82,17 @@ func (n *Node) rpcHandler(w http.ResponseWriter, r *http.Request, app string) {
 		http.Error(w, "invalid command", 400)
 		return
 	}
-	if request.Stamp != nil && request.Method != "snapshot_read" {
+	if request.Stamp != nil && request.Method != "snapshot_read" && request.Method != "local_snapshot" {
 		http.Error(w, "invalid command", 400)
 		return
 	}
 	switch request.Method {
+	case "local_snapshot":
+		if request.Transaction != nil || len(request.Checks) != 0 {
+			err = ErrInvalid
+		} else {
+			response.Records, response.Stamp, err = n.localSnapshot(r.Context(), request.Keys, request.Stamp)
+		}
 	case "snapshot_read":
 		if request.Transaction != nil || len(request.Checks) != 0 {
 			err = ErrInvalid
@@ -192,7 +198,7 @@ func (c *Client) call(ctx context.Context, request rpcRequest) (rpcResponse, err
 	}
 	address, id := c.local, c.id
 	c.mu.Lock()
-	if c.leaderID != "" {
+	if request.Method != "local_snapshot" && c.leaderID != "" {
 		address, id = c.leaderAddress, c.leaderID
 	}
 	c.mu.Unlock()
@@ -207,7 +213,9 @@ func (c *Client) call(ctx context.Context, request rpcRequest) (rpcResponse, err
 		response, err := httpClient.Do(req)
 		if err != nil {
 			c.mu.Lock()
-			c.leaderID = ""
+			if request.Method != "local_snapshot" {
+				c.leaderID = ""
+			}
 			c.mu.Unlock()
 			return rpcResponse{}, err
 		}
@@ -223,7 +231,9 @@ func (c *Client) call(ctx context.Context, request rpcRequest) (rpcResponse, err
 		switch result.Error {
 		case "":
 			c.mu.Lock()
-			c.leaderAddress, c.leaderID = address, id
+			if request.Method != "local_snapshot" {
+				c.leaderAddress, c.leaderID = address, id
+			}
 			c.mu.Unlock()
 			return result, nil
 		case "conflict":
@@ -233,8 +243,13 @@ func (c *Client) call(ctx context.Context, request rpcRequest) (rpcResponse, err
 		case "capacity":
 			return result, ErrCapacity
 		case "not_leader":
+			if request.Method == "local_snapshot" {
+				return result, ErrNotLeader
+			}
 			c.mu.Lock()
-			c.leaderID = ""
+			if request.Method != "local_snapshot" {
+				c.leaderID = ""
+			}
 			c.mu.Unlock()
 			if hop == 0 && result.Leader == nil && address != c.local {
 				address, id = c.local, c.id
@@ -248,7 +263,9 @@ func (c *Client) call(ctx context.Context, request rpcRequest) (rpcResponse, err
 			id = result.Leader.ID
 		default:
 			c.mu.Lock()
-			c.leaderID = ""
+			if request.Method != "local_snapshot" {
+				c.leaderID = ""
+			}
 			c.mu.Unlock()
 			return result, errors.New("metadata operation outcome unavailable")
 		}

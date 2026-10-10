@@ -44,40 +44,36 @@ HTTP access to /debug/pprof/; never publish this socket externally.
 
 Integrity and authorization
 The integrity LRU is process-local: at most 256 versions and 32768 aggregate
-stat/manifest entries. Four cold verifications may run at once; concurrent
+stat/manifest entries. Eight cold verifications may run at once; concurrent
 requests for one version share a verification. Cache hits compare the manifest,
 requested file and ancestor directories' inode, size, mode and modification time.
 Changes trigger a complete manifest/hash verification. This relies on published
 content being immutable; undetectable bit flips with identical stat information
 require a later cache miss to discover. No access decision is stored here.
 
-Raft transactions use one same-term leader confirmation, then one unchanged
-state index. The final optimistic revision check does not perform another quorum
-round. Intervening writes retry the transaction. Concurrent confirmations are
-coalesced. Async reads share the existing bounded authority proof and use a
-shared lock on an immutable view. Followers never serve stale metadata: HTTP
-remains available on every primary, while metadata RPCs route to the verified
-leader using pooled, identity-pinned mTLS connections. Older leaders during a
-rolling upgrade retain the conservative per-key fenced protocol.
+Management Raft transactions use one same-term leader confirmation and final
+snapshot/CAS validation. Explicit serving transactions now use coherent local
+applied snapshots, with no age limit; only absent records trigger a bounded whole
+leader lookup. Followers may serve old public policy/digests or old denials for an
+unbounded replication delay. Known expiry is evaluated against current time.
+Preview IO still validates its local snapshot after IO. No authorization decision
+is cached with files. Coordinator unavailability is 503, not unrestricted leader
+fallback. See CLUSTER.md for confirmation admission and rollout details.
 
-Authorization linearizes after request arrival. A completed earlier privacy,
-delete or rename is visible; a change during preview IO invalidates the read.
-An operation overlapping a later change may linearize first. Neither a server nor
-metadata Raft can recall bytes already sent or public browser cache entries.
 The requested public cache lifetimes intentionally allow browser reuse after
 privacy changes; these headers must not be described as instant revocation.
 Private responses and pending previews remain no-store. Public file validators
 come from manifest hashes, with a distinct watermark representation identity.
 
 Explore cache lives 20 seconds with singleflight. Publish/update/claim/privacy/
-rename/delete invalidate it locally; other primary instances may lag 20 seconds.
+rename/delete invalidate it locally; other primary instances also depend on local metadata replication, which has no maximum delay.
 Public HTTP policies: thumbnail 300 seconds / stale-while-revalidate 86400;
 assets 60 / 600; HTML no-cache; Explore 20 / 120; config 300 seconds.
 Both Explore and thumbnails expose all response headers through wildcard CORS.
 Gzip covers HTML/CSS/JS/JSON/SVG/plain text, including internal file redirects.
 The shipped Nginx image has no Brotli module. Favicon returns 204 with cross-origin
-resource policy. Serving preparation keeps its existing 10-second budget; remote
-content fetches now inherit that budget as well.
+resource policy. Metadata preparation keeps its ten-second budget. Local integrity and remote
+fetches have separate two-minute budgets derived from the original request.
 
 Serving plan baseline (2026-10-10)
 Baseline main SHA: 15f8309 (prior serving code plus accounting/reclamation).

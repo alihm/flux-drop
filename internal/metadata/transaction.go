@@ -10,6 +10,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/runonflux/flux-drop/internal/kv"
@@ -23,14 +24,19 @@ type Backend interface {
 	Commit(context.Context, kv.Transaction) error
 }
 
-type Store struct{ Backend Backend }
+type Store struct {
+	Backend     Backend
+	servingOnce sync.Once
+	serving     *servingState
+}
 type Tx struct {
-	ctx        context.Context
-	backend    Backend
-	reads      map[string]kv.Record
-	writes     map[string]kv.Write
-	durability kv.Durability
-	snapshot   bool
+	ctx             context.Context
+	backend         Backend
+	reads           map[string]kv.Record
+	writes          map[string]kv.Write
+	durability      kv.Durability
+	snapshot        bool
+	dependencyError error
 }
 
 // Encoding is independent of public JSON tags: project ownership/password fields
@@ -60,6 +66,7 @@ func (t *Tx) Prefetch(keys []string) error {
 	}
 	values, err := t.backend.Read(t.ctx, pending)
 	if err != nil {
+		t.dependencyError = err
 		return err
 	}
 	for _, key := range pending {
@@ -160,6 +167,7 @@ func (t *Tx) record(key string) (kv.Record, error) {
 	}
 	r, err := t.backend.Read(t.ctx, []string{key})
 	if err != nil {
+		t.dependencyError = err
 		return kv.Record{}, err
 	}
 	t.reads[key] = r[key]

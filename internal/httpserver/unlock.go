@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/runonflux/flux-drop/internal/metadata"
 	"github.com/runonflux/flux-drop/internal/password"
 	"github.com/runonflux/flux-drop/internal/project"
 	"github.com/runonflux/flux-drop/internal/session"
@@ -99,8 +100,9 @@ func registerUnlock(mux *http.ServeMux, origin string, deps Dependencies, repo g
 		if err != nil {
 			return false
 		}
-		view, err := deps.Sessions.Read(r.Context(), token)
+		view, err := deps.Sessions.ReadForServing(r.Context(), token)
 		if err != nil {
+			recordPrivateAccessError(r, err)
 			return false
 		}
 		a, err := project.ActorFrom(token, view)
@@ -111,6 +113,24 @@ func registerUnlock(mux *http.ServeMux, origin string, deps Dependencies, repo g
 		if len(cookies) != 1 {
 			return false
 		}
+		if serving, ok := repo.(interface {
+			ValidateSelectedGrantForServing(context.Context, project.Actor, project.Project, string) error
+		}); ok {
+			err := serving.ValidateSelectedGrantForServing(r.Context(), a, p, cookies[0].Value)
+			recordPrivateAccessError(r, err)
+			return err == nil
+		}
 		return repo.ValidateGrant(r.Context(), a, p.ID, cookies[0].Value) == nil
+	}
+}
+
+type privateAccessErrorKey struct{}
+
+func recordPrivateAccessError(r *http.Request, err error) {
+	if err == nil || errors.Is(err, session.ErrUnauthorized) || errors.Is(err, project.ErrUnlockDenied) || errors.Is(err, project.ErrNotFound) || errors.Is(err, metadata.ErrNotFound) {
+		return
+	}
+	if target, ok := r.Context().Value(privateAccessErrorKey{}).(*error); ok {
+		*target = err
 	}
 }

@@ -230,3 +230,32 @@ func (s *Service) Logout(ctx context.Context, token, csrf string) (string, View,
 	}
 	return newToken, View{Record: next}, nil
 }
+
+func (s *Service) ReadForServing(ctx context.Context, token string) (View, error) {
+	digest, err := Digest(token)
+	if err != nil {
+		return View{}, err
+	}
+	var r Record
+	if store, ok := s.Store.(interface {
+		GetForServing(context.Context, string) (Record, error)
+	}); ok {
+		r, err = store.GetForServing(ctx, digest)
+	} else {
+		r, err = s.Store.Get(ctx, digest)
+	}
+	if err == nil && !r.Active(s.now()) {
+		err = ErrUnauthorized
+	}
+	if err != nil {
+		return View{}, err
+	}
+	v := View{Record: r}
+	if r.UID != "" && s.now().Before(r.AuthUntil) {
+		if err := s.Verifier.CheckAccount(ctx, Identity{UID: r.UID, AuthTime: r.AuthTime, ExpiresAt: r.AuthUntil}); err != nil {
+			return View{}, err
+		}
+		v.Authenticated = true
+	}
+	return v, nil
+}

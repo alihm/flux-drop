@@ -875,3 +875,124 @@ func (s *RaftRepository) checkNotRetired(tx *raftTx, ref VersionRef) error {
 	}
 	return ErrConflict
 }
+
+func (s *RaftRepository) ResolveForServing(ctx context.Context, slug string) (Project, error) {
+	if !slugRE.MatchString(slug) {
+		return Project{}, ErrNotFound
+	}
+	var result Project
+	err := s.runServing(ctx, "slug:"+slug, true, func(ctx context.Context, tx *raftTx) error {
+		idx, err := raftRead[slugRecord](tx, s.raftRef("slugs", slug))
+		if raftMissing(err) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		p, err := raftRead[Project](tx, s.raftRef("projects", idx.ProjectID))
+		if raftMissing(err) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if !p.Live(s.now()) {
+			return ErrNotFound
+		}
+		result = p
+		return nil
+	})
+	return result, err
+}
+
+func (s *RaftRepository) GetOwnedForServing(ctx context.Context, a Actor, id string) (Project, error) {
+	if !idRE.MatchString(id) {
+		return Project{}, ErrNotFound
+	}
+	var result Project
+	err := s.runServing(ctx, "owner:"+hash([]string{a.SessionDigest, a.UID, a.AnonymousID, id}), false, func(ctx context.Context, tx *raftTx) error {
+		if err := s.authorize(tx, a); err != nil {
+			return err
+		}
+		p, err := raftRead[Project](tx, s.raftRef("projects", id))
+		if raftMissing(err) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if !a.Owns(p.Owner) || !p.Live(s.now()) {
+			return ErrNotFound
+		}
+		result = p
+		return nil
+	})
+	return result, err
+}
+
+func (s *RaftRepository) ValidateGrantForServing(ctx context.Context, a Actor, id, token string) error {
+	digest, err := session.Digest(token)
+	if err != nil || !idRE.MatchString(id) {
+		return ErrUnlockDenied
+	}
+	return s.runServing(ctx, "grant:"+hash([]string{a.SessionDigest, id, token}), false, func(ctx context.Context, tx *raftTx) error {
+		if err := s.authorize(tx, a); err != nil {
+			return err
+		}
+		g, err := raftRead[Grant](tx, s.raftRef("grants", digest))
+		if raftMissing(err) {
+			return ErrUnlockDenied
+		}
+		if err != nil {
+			return err
+		}
+		if g.ProjectID != id || g.SessionDigest != a.SessionDigest || !s.now().Before(g.ExpiresAt) {
+			return ErrUnlockDenied
+		}
+		p, err := raftRead[Project](tx, s.raftRef("projects", id))
+		if raftMissing(err) {
+			return ErrUnlockDenied
+		}
+		if err != nil {
+			return err
+		}
+		if !p.Live(s.now()) || !p.Private || p.PolicyRevision != g.PolicyRevision {
+			return ErrUnlockDenied
+		}
+		return nil
+	})
+}
+
+func (s *RaftRepository) ValidateSelectedGrantForServing(ctx context.Context, a Actor, selected Project, token string) error {
+	id := selected.ID
+	digest, err := session.Digest(token)
+	if err != nil || !idRE.MatchString(id) {
+		return ErrUnlockDenied
+	}
+	return s.runServing(ctx, "grant:"+hash([]string{a.SessionDigest, id, token, hash(selected)}), false, func(ctx context.Context, tx *raftTx) error {
+		if err := s.authorize(tx, a); err != nil {
+			return err
+		}
+		g, err := raftRead[Grant](tx, s.raftRef("grants", digest))
+		if raftMissing(err) {
+			return ErrUnlockDenied
+		}
+		if err != nil {
+			return err
+		}
+		if g.ProjectID != id || g.SessionDigest != a.SessionDigest || !s.now().Before(g.ExpiresAt) {
+			return ErrUnlockDenied
+		}
+		p, err := raftRead[Project](tx, s.raftRef("projects", id))
+		if raftMissing(err) {
+			return ErrUnlockDenied
+		}
+		if err != nil {
+			return err
+		}
+		if !p.Live(s.now()) || !p.Private || p.PolicyRevision != g.PolicyRevision || p.PolicyRevision != selected.PolicyRevision || p.ActiveDigest != selected.ActiveDigest || p.Slug != selected.Slug {
+			return ErrUnlockDenied
+		}
+		return nil
+	})
+}

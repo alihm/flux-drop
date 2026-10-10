@@ -41,15 +41,18 @@ incomplete preview. Landlock must be enabled on the Flux host; otherwise
 rendering fails closed and leaves a placeholder.
 
 Explore shows up to 24 recently published or updated **claimed, live public** projects.
-It rereads current project records through quorum-backed transactions on every
-request. Unclaimed, private, expired, and deleted sites are omitted regardless of stale
+It caches cards for 20 seconds, rebuilding from coherent local serving metadata.
+Local metadata replication has no maximum delay; policy changes may remain
+invisible indefinitely on a disconnected follower. Unclaimed, private, expired, and deleted sites are omitted regardless of stale
 index entries or images on disk. Owner IDs, storage locations, passwords, and
 credentials are absent from responses. Names are rendered as text, and links
 are restricted to validated local project URLs. Public sites appear
 automatically after claim (or publication while signed in). Claiming updates
 gallery eligibility without rerendering the same content. Thumbnail requests check current visibility and version; private
 images require a current owner's session. Private visitor access grants do not
-grant thumbnail access. Images are served with `Cache-Control: no-store`.
+grant thumbnail access. Public images use max-age=300/stale-while-revalidate=86400 and ETags; private
+images and pending placeholders remain no-store. Thumbnail IO retains final
+local-snapshot validation. Browser reuse has its own cache lifetime.
 
 Image storage is bounded to 512 MiB and 10,000 files per replicated copy. Old
 images can be discarded at that ceiling; projects remain available and older

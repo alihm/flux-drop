@@ -130,9 +130,11 @@ Issuance rechecks the password digest/revision and current policy after hashing,
 closing the password-change-during-verification race. Grant expiry is enforced
 synchronously; configure `drop_grants.expiresAt` TTL separately for cleanup.
 
-These are backend primitives, not yet a visitor unlock HTTP endpoint or cookie
-flow. Private delivery still denies all visitors. Integrating the endpoint must
-retain exact-Origin/CSRF protection, share the hashing worker pool with owner
-operations, avoid tokens in URLs/logs, use secure project-scoped grant cookies,
-and enforce the self-contained private HTML profile. Missing local password
-metadata currently fails closed rather than fetching it from peers.
+Visitor unlock uses the existing browser endpoint and secure project-scoped grant
+cookies. Issuance retains leader-backed exact-Origin/CSRF/password-policy checks.
+Serving validates sessions, grants and the selected project against coherent local
+metadata. Revocations/policy updates take effect when replicated locally, with no
+maximum delay; known grant/session/project expiry is still checked synchronously.
+Absent required records permit a bounded whole leader lookup; local denials do
+not. Coordinator/dependency failures return 503, confirmation overload denies.
+The self-contained private HTML profile remains enforced.

@@ -3,6 +3,7 @@ package cluster
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +36,7 @@ type Node struct {
 	transport  raft.Transport
 	config     Config
 	started    time.Time
+	localEpoch string
 	operations chan struct{}
 	changeMu   sync.Mutex
 	closeOnce  sync.Once
@@ -94,7 +96,7 @@ func start(c Config, transport raft.Transport, tune func(*raft.Config)) (*Node, 
 	if err != nil {
 		return nil, err
 	}
-	n := &Node{raft: r, state: fsm, store: store, transport: transport, config: c, started: time.Now(), operations: make(chan struct{}, 64)}
+	n := &Node{raft: r, state: fsm, store: store, transport: transport, config: c, started: time.Now(), localEpoch: rand.Text(), operations: make(chan struct{}, 64)}
 	if c.AsyncContent {
 		n.async, err = newAsyncWriter(n)
 		if err != nil {

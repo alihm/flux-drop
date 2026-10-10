@@ -92,3 +92,9 @@ Unit tests cover ownership isolation, CSRF, account switching, expiration,
 revocation/provider failure, malformed/unsigned Firebase tokens, cookie flags,
 request limits, and stale requests. Emulator tests exercise legacy Firestore
 transactions; live Google popup/sign-in remains a deployment acceptance test.
+
+Private site/thumbnail serving explicitly reads local replicated session state.
+This may delay revocation indefinitely during replication isolation; known session
+and authentication expiry still use the current clock. Session/owner management,
+login, rotation and unlock creation keep their original leader-backed semantics.
+Absent serving records use bounded confirmations; existing denials never do.

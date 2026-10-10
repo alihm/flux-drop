@@ -479,3 +479,75 @@ func (s *Service) save(p project.Project, raw []byte) error {
 	defer dir.Close()
 	return dir.Sync()
 }
+
+func (s *Service) ReadProjectForServing(ctx context.Context, id string, fn func(project.Project) error) (project.Project, error) {
+	var p project.Project
+	if !idPattern.MatchString(id) {
+		return p, project.ErrNotFound
+	}
+	err := s.Store.RunServing(ctx, "preview:"+id, false, true, func(tx *metadata.Tx) error {
+		if err := tx.Get("projects/"+id, &p); err != nil {
+			return err
+		}
+		if !p.Live(time.Now()) || !digestPattern.MatchString(p.ActiveDigest) {
+			return project.ErrNotFound
+		}
+		if fn != nil {
+			return fn(p)
+		}
+		return nil
+	})
+	if errors.Is(err, metadata.ErrNotFound) {
+		err = project.ErrNotFound
+	}
+	return p, err
+}
+func (s *Service) ExploreForServing(ctx context.Context) ([]Card, error) {
+	rows := []Card{}
+	err := s.Store.RunServing(ctx, "explore", false, false, func(tx *metadata.Tx) error {
+		rows = []Card{}
+		var index Recent
+		if err := tx.Get("preview_recent/public", &index); errors.Is(err, metadata.ErrNotFound) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		if len(index.IDs) > maxRecent {
+			return project.ErrInvalid
+		}
+		keys := make([]string, 0, len(index.IDs))
+		for _, id := range index.IDs {
+			if idPattern.MatchString(id) {
+				keys = append(keys, "projects/"+id)
+			}
+		}
+		if err := tx.Prefetch(keys); err != nil {
+			return err
+		}
+		for _, key := range keys {
+			var p project.Project
+			if err := tx.Get(key, &p); errors.Is(err, metadata.ErrNotFound) {
+				continue
+			} else if err != nil {
+				return err
+			}
+			if discoverable(p) && digestPattern.MatchString(p.ActiveDigest) {
+				rows = append(rows, Card{ID: p.ID, Slug: p.Slug, InitialSuffix: p.InitialSuffix, UpdatedAt: updated(p), Thumbnail: "/api/projects/" + p.ID + "/thumbnail?v=" + p.ActiveDigest, Claimed: true})
+			}
+		}
+		sort.Slice(rows, func(i, j int) bool {
+			if rows[i].UpdatedAt.Equal(rows[j].UpdatedAt) {
+				return rows[i].ID < rows[j].ID
+			}
+			return rows[i].UpdatedAt.After(rows[j].UpdatedAt)
+		})
+		if len(rows) > 24 {
+			rows = rows[:24]
+		}
+		return nil
+	})
+	return rows, err
+}
+
+// Remember fences candidates against current policy. No public response trusts
+// the index, and the index contains neither identities nor credentials.
