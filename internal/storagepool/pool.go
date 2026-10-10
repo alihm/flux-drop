@@ -46,13 +46,14 @@ type appRuntime struct {
 	loads     map[netip.AddrPort]int
 }
 type Pool struct {
-	store     *metadata.Store
-	config    Config
-	apps      []*appRuntime
-	cache     *fileCache
-	downloads chan struct{}
-	probes    chan struct{}
-	fetch     *fetchState
+	store      *metadata.Store
+	config     Config
+	apps       []*appRuntime
+	cache      *fileCache
+	downloads  chan struct{}
+	probes     chan struct{}
+	fetch      *fetchState
+	nginxCache bool
 }
 
 func NewPool(c Config, cacheRoot string) (*Pool, error) {
@@ -68,6 +69,9 @@ func NewPool(c Config, cacheRoot string) (*Pool, error) {
 	}
 	if c.CacheEntries == 0 {
 		c.CacheEntries = 4096
+	}
+	if c.FetchConcurrency < 1 || c.FetchConcurrency > 128 || c.FetchQueue < 0 || c.FetchQueue > 8192 || c.FetchBytes < 1<<20 || c.FetchBytes > 1<<40 || c.CacheEntries < 1 || c.CacheEntries > 65536 {
+		return nil, errors.New("invalid serving limits")
 	}
 	p := &Pool{config: c, downloads: make(chan struct{}, c.FetchConcurrency), probes: make(chan struct{}, 8), fetch: newFetchState(c)}
 	cache, err := newFileCache(cacheRoot, c.CacheBytes)
@@ -100,6 +104,7 @@ func (p *Pool) Close() {
 		p.fetch.mu.Unlock()
 		p.fetch.cancel()
 		p.fetch.wg.Wait()
+		p.sweepSpools()
 	}
 	for _, a := range p.apps {
 		a.client.CloseIdleConnections()
@@ -440,7 +445,7 @@ func (p *Pool) AdminHandler() http.Handler {
 			return
 		}
 		result := p.appStatuses()
-		jsonReply(w, 200, map[string]any{"apps": result})
+		jsonReply(w, 200, map[string]any{"apps": result, "serving": p.ServingMetrics()})
 	})
 }
 func (p *Pool) adminAuthorized(r *http.Request) bool {

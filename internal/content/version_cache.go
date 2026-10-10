@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -32,13 +33,26 @@ type VersionCache struct {
 	slots        chan struct{}
 }
 
-func NewVersionCache(limit int) *VersionCache {
+func NewVersionCache(limit int) *VersionCache { return NewVersionCacheWithConcurrency(limit, 8) }
+func NewVersionCacheWithConcurrency(limit, concurrency int) *VersionCache {
+	if concurrency < 1 {
+		concurrency = 1
+	}
 	if limit < 1 {
 		limit = 1
 	}
-	return &VersionCache{limit: limit, entries: map[string]*list.Element{}, lru: list.New(), slots: make(chan struct{}, 4)}
+	return &VersionCache{limit: limit, entries: map[string]*list.Element{}, lru: list.New(), slots: make(chan struct{}, concurrency)}
 }
 func sameStat(a, b fs.FileInfo) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	if left, ok := a.Sys().(*syscall.Stat_t); ok {
+		right, ok := b.Sys().(*syscall.Stat_t)
+		if !ok || left.Ctim != right.Ctim {
+			return false
+		}
+	}
 	return a != nil && b != nil && os.SameFile(a, b) && a.Size() == b.Size() && a.ModTime() == b.ModTime() && a.Mode() == b.Mode()
 }
 func versionStats(ctx context.Context, directory string) (map[string]fs.FileInfo, error) {
@@ -200,3 +214,7 @@ func (c *VersionCache) VerifyContext(ctx context.Context, directory, digest, fil
 }
 
 func cloneManifest(m Manifest) Manifest { m.Files = append([]File(nil), m.Files...); return m }
+
+// SameFileSnapshot also includes Linux nanosecond ctime, detecting rewrites that
+// deliberately restore size and mtime. This is integrity, never authorization.
+func SameFileSnapshot(a, b fs.FileInfo) bool { return sameStat(a, b) }

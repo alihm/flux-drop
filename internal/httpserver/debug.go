@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net"
 	"net/http"
@@ -11,13 +12,21 @@ import (
 
 // StartDebugListener deliberately uses a separate, unexposed loopback socket.
 // Never mount these handlers on the public mux (Nginx itself connects on loopback).
-func StartDebugListener(ctx context.Context) {
+func StartDebugListener(ctx context.Context, snapshots ...func() any) {
 	listener, err := net.Listen("tcp", "127.0.0.1:6060")
 	if err != nil {
 		slog.Warn("loopback profiling listener unavailable")
 		return
 	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /debug/serving", func(w http.ResponseWriter, r *http.Request) {
+		out := []any{}
+		for _, snapshot := range snapshots {
+			out = append(out, snapshot())
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	})
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)

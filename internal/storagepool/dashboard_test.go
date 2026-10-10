@@ -7,6 +7,7 @@ import (
 	"github.com/runonflux/flux-drop/internal/project"
 	"github.com/runonflux/flux-drop/internal/session"
 	"github.com/runonflux/flux-drop/internal/testmetadata"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -112,5 +113,24 @@ func TestRemovalRetainedAccountingAndRestore(t *testing.T) {
 	}
 	if err := store.Run(ctx, func(tx *metadata.Tx) error { return p.ChangeApp(tx, "unknown", "remove") }); !errors.Is(err, ErrUnknownApp) {
 		t.Fatal(err)
+	}
+}
+
+func TestProtectedStatusRetainsLocalMetricsWhenMetadataUnavailable(t *testing.T) {
+	_, _, p := fixture(t, t.TempDir(), nil)
+	backend := &testmetadata.Backend{Failure: errors.New("leader unavailable")}
+	store := &metadata.Store{Backend: backend}
+	p.BindMetadata(store)
+	r := httptest.NewRequest("GET", "/api/storage/apps", nil)
+	r.Header.Set("Authorization", "Bearer "+testKey)
+	rec := httptest.NewRecorder()
+	p.AdminHandlerWithOperations(store).ServeHTTP(rec, r)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"partial":true`) || !strings.Contains(rec.Body.String(), `"serving":`) || !strings.Contains(rec.Body.String(), `"metadataAvailable":false`) {
+		t.Fatal(rec.Code, rec.Body.String())
+	}
+	denied := httptest.NewRecorder()
+	p.AdminHandlerWithOperations(store).ServeHTTP(denied, httptest.NewRequest("GET", "/api/storage/apps", nil))
+	if denied.Code != 404 {
+		t.Fatal("status metrics public", denied.Code)
 	}
 }

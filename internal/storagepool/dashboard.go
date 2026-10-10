@@ -58,7 +58,7 @@ func (p *Pool) Dashboard(ctx context.Context) (any, error) {
 		}
 		return nil
 	})
-	return map[string]any{"apps": p.appStatuses(), "allocations": allocations, "controls": controls, "headroomBytes": Headroom, "reclamationEnabled": p.config.Reclamation}, err
+	return map[string]any{"apps": p.appStatuses(), "allocations": allocations, "controls": controls, "headroomBytes": Headroom, "reclamationEnabled": p.config.Reclamation, "serving": p.ServingMetrics(), "partial": err != nil, "metadataAvailable": err == nil}, err
 }
 
 // ChangeApp runs inside the admin authorization transaction. A removal and an

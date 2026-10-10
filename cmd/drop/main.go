@@ -47,6 +47,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if err := content.ConfigureServing(get); err != nil {
+		return err
+	}
 	if storageConfig.Role == "secondary" {
 		return runSecondary(storageConfig)
 	}
@@ -77,6 +80,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
+		storage.EnableNginxCache()
 		workerCtx, cancel := context.WithCancel(context.Background())
 		stopStorage = cancel
 		storageDone = make(chan struct{})
@@ -102,6 +106,7 @@ func run() error {
 		return errors.New("peer runtime requires FIREBASE_PROJECT_ID")
 	}
 	var projects project.Repository
+	var servingStore *metadata.Store
 	maintenanceEnabled := get("DROP_MAINTENANCE_ENABLED")
 	if maintenanceEnabled != "" && maintenanceEnabled != "true" && maintenanceEnabled != "false" {
 		return errors.New("DROP_MAINTENANCE_ENABLED must be true or false")
@@ -135,6 +140,7 @@ func run() error {
 			return err
 		}
 		store := &metadata.Store{Backend: client}
+		servingStore = store
 		dependencies.Sessions = &session.Service{Store: &session.RaftStore{Store: store, CreationsPerMinute: budget}, Verifier: verifier}
 		raftProjects := &project.RaftRepository{Store: store, AnonymousByteLimit: publishing.anonymousBytes, AccountByteLimit: publishing.accountBytes}
 		if storage != nil {
@@ -308,7 +314,15 @@ func run() error {
 	if publishing.enabled && publishing.password != "" {
 		handler = httpserver.StagingAccess(handler, publishing.user, publishing.password)
 	}
-	httpserver.StartDebugListener(ctx)
+	httpserver.StartDebugListener(ctx, func() any {
+		if storage != nil {
+			return storage.ServingMetrics()
+		}
+		if servingStore != nil {
+			return servingStore.ServingMetrics()
+		}
+		return map[string]any{"available": false}
+	})
 	server := &http.Server{Addr: "127.0.0.1:8081", Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 330 * time.Second, WriteTimeout: 10 * time.Minute, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	defer server.Close()
 	if storage != nil {

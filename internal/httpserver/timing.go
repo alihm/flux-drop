@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"fmt"
+	"golang.org/x/time/rate"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -94,13 +95,16 @@ func (w *timingWriter) Flush() {
 	}
 	_ = http.NewResponseController(w.ResponseWriter).Flush()
 }
+
+var slowLogLimit = rate.NewLimiter(rate.Every(100*time.Millisecond), 20)
+
 func observeRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		timing := &requestTiming{phases: map[string]time.Duration{}}
 		tw := &timingWriter{ResponseWriter: w, timing: timing, start: start}
 		defer func() {
-			if elapsed := time.Since(start); elapsed > time.Second {
+			if elapsed := time.Since(start); elapsed > time.Second && slowLogLimit.Allow() {
 				slog.Warn("slow HTTP request", "method", r.Method, "path", safeTimingPath(r), "status", tw.status, "duration", elapsed, "server_timing", timing.header(elapsed))
 			}
 		}()

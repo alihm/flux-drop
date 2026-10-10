@@ -35,7 +35,7 @@ func coordinatorConfigured(path string) (bool, error) {
 }
 
 func childCommands(coordinator bool) []*exec.Cmd {
-	children := []*exec.Cmd{exec.Command("/usr/local/bin/drop"), exec.Command("nginx", "-g", "daemon off;")}
+	children := []*exec.Cmd{exec.Command("/usr/local/bin/drop"), exec.Command("nginx", "-c", "/tmp/drop-nginx.conf", "-g", "daemon off;")}
 	if coordinator {
 		children = append(children, exec.Command("/usr/local/bin/drop-cluster", "-config", clusterManifest))
 	}
@@ -128,6 +128,10 @@ func run(ctx context.Context) error {
 			return err
 		}
 	}
+	dropBudget, clusterBudget, err := configureResources(configured)
+	if err != nil {
+		return err
+	}
 	children := childCommands(configured)
 	exits := make(chan error, len(children))
 	started := 0
@@ -145,6 +149,14 @@ func run(ctx context.Context) error {
 		child.Stderr = os.Stderr
 		if i == 1 {
 			child.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+		} else if _, explicit := os.LookupEnv("GOMEMLIMIT"); !explicit {
+			budget := dropBudget
+			if i == 2 {
+				budget = clusterBudget
+			}
+			if budget > 0 {
+				child.Env = append(os.Environ(), fmt.Sprintf("GOMEMLIMIT=%d", budget))
+			}
 		}
 		if err := child.Start(); err != nil {
 			shutdown()

@@ -208,3 +208,36 @@ func TestWarmHitDoesNotRepeatAuthorization(t *testing.T) {
 		t.Fatal("warm hit repeated authorization", calls)
 	}
 }
+
+func TestSlowResponseDoesNotHoldFetchSlotAndOwnsTemporaryBytes(t *testing.T) {
+	_, _, p := fixture(t, t.TempDir(), nil)
+	p.cache.limit = 0
+	staged := stagedHTML(t, "temporary response")
+	pr := prepared(staged)
+	if e := p.Install(context.Background(), pr, staged); e != nil {
+		t.Fatal(e)
+	}
+	f, _, release, e := p.fetchFile(context.Background(), pr.Project, "index.html")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(p.downloads) != 0 {
+		t.Fatal("slow reader holds fetch slot")
+	}
+	p.fetch.mu.Lock()
+	size := p.fetch.spoolBytes
+	p.fetch.mu.Unlock()
+	if size == 0 {
+		t.Fatal("temporary bytes not accounted")
+	}
+	name := f.Name()
+	release()
+	if fileExists(name) {
+		t.Fatal("temporary file survived final release")
+	}
+	p.fetch.mu.Lock()
+	defer p.fetch.mu.Unlock()
+	if p.fetch.spoolBytes != 0 {
+		t.Fatal("temporary accounting leaked")
+	}
+}

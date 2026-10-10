@@ -386,7 +386,7 @@ func TestPartialReplicationAndReplicaReadFailover(t *testing.T) {
 	}
 }
 func TestCacheEvictionAndPins(t *testing.T) {
-	c, err := newFileCache(filepath.Join(t.TempDir(), "cache"), 10)
+	c, err := newFileCache(filepath.Join(t.TempDir(), "cache"), 12<<10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,16 +399,16 @@ func TestCacheEvictionAndPins(t *testing.T) {
 		f.Write(bytes.Repeat([]byte("x"), int(size)))
 		return c.put(key, f, content.File{Path: key, Size: size})
 	}
-	one := put("one", 6)
-	two := put("two", 6)
-	if c.used != 6 || len(c.entries) != 1 {
+	one := put("one", 6<<10)
+	two := put("two", 6<<10)
+	if c.used != 6<<10 || len(c.entries) != 1 {
 		t.Fatal("pinned entry evicted or limit exceeded")
 	}
 	two()
 	one()
-	three := put("three", 6)
+	three := put("three", 6<<10)
 	three()
-	if c.used != 6 || c.entries["one"] != nil {
+	if c.used != 6<<10 || c.entries["one"] != nil {
 		t.Fatal("eviction failed")
 	}
 }

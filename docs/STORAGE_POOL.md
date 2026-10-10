@@ -301,3 +301,38 @@ remain subject to the separate cache limit. Manifest/hash failures try another
 healthy replica, never another content digest. Read ordering uses shuffled,
 least-loaded replicas; body close releases transport load. Install ordering still
 uses free space. TLS pinning, discovery and no-proxy/no-redirect rules are unchanged.
+
+### Cache ownership and nginx
+
+The retained cache uses an unpinned-entry LRU. `DROP_CACHE_BYTES` (default 256 MiB)
+includes block-rounded files and one conservative directory-entry block per file.
+Retired files count against the same byte and entry budgets. Downloads transfer
+ownership atomically from reserved spools into retained entries; uncached files
+remain charged until their final reader removes them. Failed unlink attempts
+remain charged and are retried before future spool admission and on shutdown.
+Resource-pressure fetches wait at most 20 seconds with bounded checks, then 503.
+
+The supervised image hands verified retained files to separate internal nginx
+public/private aliases; original paths determine MIME, not `cached-*` names.
+Branded HTML and temporary responses stay in Go. Each handoff protects the name
+for at least 60 seconds after its latest handoff. This assumes nginx opens within
+60 seconds; arbitrary process suspension cannot be solved by a timer. Grace and
+failed-unlink bytes cannot be evicted early to admit more content: admission falls
+back to bounded spooling. Restart cleanup assumes the supervisor has stopped the
+previous nginx process. Private responses retain no-store and same-origin CORP;
+public responses retain their validators/cache/CORS policy. No public cache paths.
+
+For several-GiB caches, budget additional 800 MiB active spools by default,
+1 GiB filesystem headroom, upload staging, preview storage and free inodes; do not
+size the cache to the volume's full advertised capacity. Retired bytes are within
+the cache budget. Entry count defaults to 4096 independently of byte capacity.
+Secondary descriptor hash caching is bounded to 4096 stable identities containing
+digest/hash, device/inode, size, nanosecond mtime and ctime. Version and descriptor
+verification slots default to eight; `DROP_VERSION_VERIFY_CONCURRENCY` accepts
+1–128, applied at startup in either role and standalone primary runtime.
+
+Protected storage status includes local serving counters/gauges even when
+allocation metadata is unavailable (`partial: true`, `metadataAvailable: false`).
+The loopback-only profiling listener also exposes `/debug/serving`; never publish
+port 6060. Metrics have no path/user/token labels. Slow-request logs are bounded
+by a process-wide rate limiter and omit query strings and upload ticket paths.

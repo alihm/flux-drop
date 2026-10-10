@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
-	"sync"
+	"strings"
 	"time"
 
 	"github.com/runonflux/flux-drop/internal/content"
@@ -18,137 +20,6 @@ import (
 	"github.com/runonflux/flux-drop/internal/project"
 )
 
-type cacheEntry struct {
-	path string
-	file content.File
-	last time.Time
-	pins int
-	stat os.FileInfo
-}
-type fileCache struct {
-	mu          sync.Mutex
-	root        string
-	limit, used int64
-	maxEntries  int
-	entries     map[string]*cacheEntry
-}
-
-func newFileCache(root string, limit int64) (*fileCache, error) {
-	if !filepath.IsAbs(root) || filepath.Clean(root) != root || limit < 0 {
-		return nil, errors.New("invalid local cache")
-	}
-	if err := os.MkdirAll(root, 0700); err != nil {
-		return nil, err
-	}
-	info, err := os.Lstat(root)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return nil, errors.New("cache must be a real private directory")
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil, err
-	}
-	// Reconstructing an untrusted cache after a crash is unnecessary. Only remove
-	// our own flat file namespace; a foreign entry fails startup for inspection.
-	for _, e := range entries {
-		if e.IsDir() || e.Type()&os.ModeSymlink != 0 || len(e.Name()) < 7 || e.Name()[:7] != "cached-" {
-			return nil, errors.New("unexpected entry in private cache")
-		}
-		if err := os.Remove(filepath.Join(root, e.Name())); err != nil {
-			return nil, err
-		}
-	}
-	return &fileCache{root: root, limit: limit, entries: map[string]*cacheEntry{}, maxEntries: 4096}, nil
-}
-func (c *fileCache) close() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, e := range c.entries {
-		if e.pins == 0 {
-			_ = os.Remove(e.path)
-		}
-	}
-}
-func cacheKey(p project.Project, name string) string {
-	h := sha256.Sum256([]byte(p.StorageApp + "\x00" + p.ID + "\x00" + p.ActiveDigest + "\x00" + name))
-	return hex.EncodeToString(h[:])
-}
-func (c *fileCache) get(key string) (*os.File, content.File, func(), bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	e := c.entries[key]
-	if e == nil {
-		return nil, content.File{}, nil, false
-	}
-	f, err := os.Open(e.path)
-	if err != nil {
-		c.used -= e.file.Size
-		delete(c.entries, key)
-		return nil, content.File{}, nil, false
-	}
-	info, err := f.Stat()
-	link, linkErr := os.Lstat(e.path)
-	if err != nil || linkErr != nil || !info.Mode().IsRegular() || !os.SameFile(info, link) || e.stat == nil || !os.SameFile(e.stat, info) || info.Size() != e.file.Size || info.ModTime() != e.stat.ModTime() {
-		f.Close()
-		if e.pins == 0 {
-			_ = os.Remove(e.path)
-			c.used -= e.file.Size
-			delete(c.entries, key)
-		}
-		return nil, content.File{}, nil, false
-	}
-	e.pins++
-	e.last = time.Now()
-	return f, e.file, func() { f.Close(); c.mu.Lock(); e.pins--; c.mu.Unlock() }, true
-}
-func (c *fileCache) invalidate(key string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	e := c.entries[key]
-	if e != nil && e.pins == 0 {
-		if os.Remove(e.path) == nil || !fileExists(e.path) {
-			c.used -= e.file.Size
-			delete(c.entries, key)
-		}
-	}
-}
-func fileExists(path string) bool { _, err := os.Lstat(path); return !os.IsNotExist(err) }
-
-// put keeps the already opened descriptor pinned through response delivery.
-// Failed/oversize cache admission leaves a temporary verified proxy response.
-func (c *fileCache) put(key string, f *os.File, entry content.File) func() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	temporary := func() { f.Close(); _ = os.Remove(f.Name()) }
-	if entry.Size > c.limit || c.limit == 0 || c.entries[key] != nil {
-		return temporary
-	}
-	for c.used+entry.Size > c.limit || len(c.entries) >= c.maxEntries {
-		var oldest string
-		for k, e := range c.entries {
-			if e.pins == 0 && (oldest == "" || e.last.Before(c.entries[oldest].last)) {
-				oldest = k
-			}
-		}
-		if oldest == "" {
-			return temporary
-		}
-		e := c.entries[oldest]
-		if err := os.Remove(e.path); err != nil {
-			return temporary
-		}
-		c.used -= e.file.Size
-		delete(c.entries, oldest)
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return temporary
-	}
-	e := &cacheEntry{path: f.Name(), file: entry, last: time.Now(), pins: 1, stat: info}
-	c.entries[key] = e
-	c.used += entry.Size
-	return func() { f.Close(); c.mu.Lock(); e.pins--; c.mu.Unlock() }
-}
 func (p *Pool) RemotePrivateContent() bool { return true }
 func (p *Pool) ServeProject(w http.ResponseWriter, r *http.Request, pr project.Project, name string) {
 	p.serve(w, r, pr, name, nil)
@@ -194,7 +65,7 @@ func (p *Pool) serve(w http.ResponseWriter, r *http.Request, pr project.Project,
 		if httpcache.File(w, r, name, entry.SHA256, pr.Private, !pr.WatermarkDisabled) {
 			return
 		}
-		http.ServeContent(w, r, name, time.Time{}, f)
+		p.deliverFile(w, r, pr, name, key, f)
 		return
 	}
 
@@ -216,40 +87,84 @@ func (p *Pool) serve(w http.ResponseWriter, r *http.Request, pr project.Project,
 	if httpcache.File(w, r, name, entry.SHA256, pr.Private, !pr.WatermarkDisabled) {
 		return
 	}
-	http.ServeContent(w, r, name, time.Time{}, f)
+	p.deliverFile(w, r, pr, name, key, f)
 }
 
-func (p *Pool) download(ctx context.Context, a *appRuntime, addr netip.AddrPort, path string, entry content.File) (*os.File, error) {
-	res, err := a.request(ctx, addr, "GET", path, nil, "")
+func (p *Pool) download(ctx context.Context, a *appRuntime, addr netip.AddrPort, path string, entry content.File) (file *os.File, release func(), err error) {
+	release, err = p.reserveSpoolWait(ctx, entry.Size)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 || res.Header.Get("Content-Encoding") != "" {
-		return nil, project.ErrStorage
-	}
-	f, err := os.CreateTemp(p.cache.root, "cached-")
-	if err != nil {
-		return nil, err
-	}
+	reserved := release
+	var f *os.File
 	success := false
 	defer func() {
 		if !success {
-			f.Close()
-			os.Remove(f.Name())
+			if f != nil {
+				f.Close()
+				if e := os.Remove(f.Name()); e != nil && !os.IsNotExist(e) {
+					p.fetch.mu.Lock()
+					p.fetch.orphans[f.Name()] = reserved
+					p.fetch.mu.Unlock()
+					return
+				}
+			}
+			reserved()
 		}
 	}()
+	res, err := a.request(ctx, addr, "GET", path, nil, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 || res.Header.Get("Content-Encoding") != "" {
+		return nil, nil, project.ErrStorage
+	}
+	f, err = os.CreateTemp(p.cache.root, "cached-")
+	if err != nil {
+		return nil, nil, err
+	}
 	h := sha256.New()
 	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(res.Body, entry.Size+1))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if n != entry.Size || hex.EncodeToString(h.Sum(nil)) != entry.SHA256 {
-		return nil, content.ErrInvalid
+		return nil, nil, content.ErrInvalid
 	}
 	if _, err = f.Seek(0, 0); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	success = true
-	return f, nil
+	return f, release, nil
+}
+
+// EnableNginxCache is selected only by the supervised image runtime, whose
+// internal aliases have a fixed private cache root. Standalone constructors and
+// test servers continue streaming in Go without assuming nginx is present.
+func (p *Pool) EnableNginxCache() {
+	p.nginxCache = p.cache.root == "/var/lib/drop-cluster/storage-cache"
+}
+func (p *Pool) deliverFile(w http.ResponseWriter, r *http.Request, pr project.Project, name, key string, f *os.File) {
+	ext := strings.ToLower(filepath.Ext(name))
+	branded := !pr.WatermarkDisabled && (ext == ".html" || ext == ".htm")
+	if p.nginxCache && !branded {
+		if base, ok := p.cache.handoff(key, f); ok {
+			kind := mime.TypeByExtension(ext)
+			if kind == "" {
+				b := make([]byte, 512)
+				n, _ := f.ReadAt(b, 0)
+				kind = http.DetectContentType(b[:n])
+			}
+			w.Header().Set("Content-Type", kind)
+			prefix := "/_drop_internal/cache-public/"
+			if pr.Private {
+				prefix = "/_drop_internal/cache-private/"
+			}
+			w.Header().Set("X-Accel-Redirect", (&url.URL{Path: prefix + base}).EscapedPath())
+			w.WriteHeader(200)
+			return
+		}
+	}
+	http.ServeContent(w, r, name, time.Time{}, f)
 }

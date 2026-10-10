@@ -52,6 +52,7 @@ type fetchState struct {
 	manifestFlight singleflight.Group
 	spoolBytes     int64
 	spoolFiles     uint64
+	orphans        map[string]func()
 	wait           time.Duration
 	budget         time.Duration
 	metrics        fetchMetrics
@@ -59,7 +60,7 @@ type fetchState struct {
 
 func newFetchState(c Config) *fetchState {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &fetchState{ctx: ctx, cancel: cancel, callers: make(chan struct{}, c.FetchConcurrency+c.FetchQueue), flights: map[string]*fileFlight{}, manifests: map[string]*list.Element{}, lru: list.New(), wait: 20 * time.Second, budget: 2 * time.Minute}
+	return &fetchState{ctx: ctx, cancel: cancel, callers: make(chan struct{}, c.FetchConcurrency+c.FetchQueue), flights: map[string]*fileFlight{}, manifests: map[string]*list.Element{}, lru: list.New(), orphans: map[string]func(){}, wait: 20 * time.Second, budget: 2 * time.Minute}
 }
 func (p *Pool) acquireFetch(ctx context.Context) error {
 	timer := time.NewTimer(p.fetch.wait)
@@ -286,27 +287,36 @@ func (p *Pool) fetchFile(ctx context.Context, pr project.Project, name string) (
 						err = project.ErrNotFound
 						return
 					}
-					reserved, e := p.reserveSpool(entry.Size)
-					if e != nil {
-						err = e
-						return
-					}
 					for _, node := range a.readNodes() {
 						addr, e := netip.ParseAddrPort(node.Address)
 						if e != nil {
 							continue
 						}
 						attempt, cancel := context.WithTimeout(bounded, 45*time.Second)
-						file, e = p.download(attempt, a, addr, prefix+"/files/"+name, entry)
+						var reserved func()
+						file, reserved, e = p.download(attempt, a, addr, prefix+"/files/"+name, entry)
 						cancel()
 						if e == nil {
 							cacheRelease := p.cache.put(key, file, entry)
-							cleanup = func() { cacheRelease(); reserved() }
+							if p.cache.owns(file.Name()) {
+								reserved()
+								cleanup = cacheRelease
+							} else {
+								cleanup = func() {
+									cacheRelease()
+									if !fileExists(file.Name()) {
+										reserved()
+									} else {
+										s.mu.Lock()
+										s.orphans[file.Name()] = reserved
+										s.mu.Unlock()
+									}
+								}
+							}
 							return
 						}
 						s.metrics.Retries.Add(1)
 					}
-					reserved()
 					err = project.ErrStorage
 				}()
 			}
@@ -347,4 +357,41 @@ func (p *Pool) fetchFile(ctx context.Context, pr project.Project, name string) (
 		return nil, content.File{}, nil, err
 	}
 	return f, flight.entry, func() { f.Close(); release() }, nil
+}
+
+func (p *Pool) sweepSpools() {
+	s := p.fetch
+	s.mu.Lock()
+	var releases []func()
+	for path, release := range s.orphans {
+		if err := os.Remove(path); err == nil || os.IsNotExist(err) {
+			delete(s.orphans, path)
+			releases = append(releases, release)
+		}
+	}
+	s.mu.Unlock()
+	for _, release := range releases {
+		release()
+	}
+}
+func (p *Pool) reserveSpoolWait(ctx context.Context, size int64) (func(), error) {
+	deadline := time.NewTimer(p.fetch.wait)
+	defer deadline.Stop()
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		p.sweepSpools()
+		release, err := p.reserveSpool(size)
+		if err == nil {
+			return release, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-deadline.C:
+			p.fetch.metrics.WaitTimeout.Add(1)
+			return nil, err
+		case <-tick.C:
+		}
+	}
 }

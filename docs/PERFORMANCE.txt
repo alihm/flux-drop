@@ -103,3 +103,24 @@ on a coherent stamped backend; legacy reads retain Check. Run/RunContent and
 writes retain their original checks and durability. Immediate primary cache hits
 use initial delivery authorization; each caller after shared remote fetching
 performs its own post-fetch policy lookup. Preview IO retains final validation.
+
+Runtime resource sizing
+The supervisor generates /tmp/drop-nginx.conf and starts nginx with -c. Workers
+use the minimum of affinity and visible cgroup CPU quota (rounded up); Go retains
+its own container-aware GOMAXPROCS defaults. Nginx targets 8192 connections/worker
+and upstream keepalive 64. Inherited soft/hard nofile limits are logged, never
+raised by the non-root process. Low soft limits reduce worker connections with
+FD headroom; limits below 256 fail startup explicitly.
+
+When GOMEMLIMIT is supplied, preserve it. Otherwise inspect applicable visible
+cgroup v2 ancestors (v1 memory/cpu fallback): drop receives 45% and drop-cluster
+20% of the effective memory ceiling. A secondary/standalone app without a
+coordinator receives 55%. Remaining memory is for nginx, preview children, page
+cache and native allocations. Unlimited/unreadable controllers do not invent a
+limit. Hidden ancestor limits cannot be inferred; soft Go limits do not guarantee
+OOM avoidance, especially with Chromium. Runtime logs record chosen budgets.
+
+Prefetch decision: omitted/disabled. No controlled foreground measurements have
+yet demonstrated a benefit without contention. Foreground singleflight/cache
+work is implemented independently; background slots alone would not establish
+safe transport/disk priority.

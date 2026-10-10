@@ -16,3 +16,9 @@ Corrupted local content must fail closed.
 The authoritative resolver is an in-memory test double. Firestore transactions
 have a separate emulator suite. This test does not cover peer fallback, Google
 login, private password grants, or publication through the command entrypoint.
+
+The same non-root/read-only fixture also runs TestPrimaryCacheNginx, exercising
+actual primary-to-secondary pinned TLS transfer followed by retained-cache nginx
+aliases, original-path HTML/JS MIME, HEAD/range/304, branded HTML in Go, private
+headers/denial and direct internal-route/traversal rejection. Its cache root is a
+disposable node-local tmpfs; no production directories are mounted.

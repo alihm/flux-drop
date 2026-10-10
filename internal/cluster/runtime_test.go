@@ -178,6 +178,34 @@ func TestCoordinatorRuntimeLifecycle(t *testing.T) {
 		if owned, e := repo.GetOwned(ctx, actor, published.ID); e != nil || owned.Owner.ID != actor.AnonymousID || owned.ChargedBytes == 0 {
 			t.Fatal("durable private fields", owned, e)
 		}
+
+		// Real mTLS local reads target this coordinator even when the client has
+		// already cached another leader. They never poison management routing.
+		await(t, func() bool {
+			records, _, e := runtimes[i].Node.localSnapshot(ctx, []string{"projects/" + published.ID}, nil)
+			return e == nil && records["projects/"+published.ID].Version != 0
+		})
+		metadataClient.mu.Lock()
+		cachedLeader := metadataClient.leaderID
+		metadataClient.mu.Unlock()
+		before := metadataClient.RPCMetrics()
+		serving, e := repo.ResolveForServing(ctx, published.Slug)
+		if e != nil || serving.ID != published.ID {
+			t.Fatal("local serving RPC", serving, e)
+		}
+		after := metadataClient.RPCMetrics()
+		if after["local_snapshot_local"]-before["local_snapshot_local"] != 2 {
+			t.Fatal("public resolution exceeded two local RPCs", before, after)
+		}
+		if after["snapshot_read_leader"] != before["snapshot_read_leader"] {
+			t.Fatal("positive local lookup contacted leader")
+		}
+		metadataClient.mu.Lock()
+		sameLeader := cachedLeader == metadataClient.leaderID
+		metadataClient.mu.Unlock()
+		if !sameLeader {
+			t.Fatal("local RPC poisoned leader routing")
+		}
 		if _, _, err := sessions.Logout(ctx, token, view.Record.CSRF); err != nil {
 			t.Fatal(err)
 		}

@@ -10,5 +10,6 @@ services:
     tmpfs:
       - /tmp
       - /data:uid=65534,gid=65534,mode=0700
+      - /var/lib/drop-cluster:uid=65534,gid=65534,mode=0700
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]

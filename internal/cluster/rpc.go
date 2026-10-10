@@ -156,6 +156,7 @@ type Client struct {
 	local              netip.AddrPort
 	id, app, clusterID string
 	statusPort         uint16
+	rpcCounts          map[string]uint64
 }
 
 func NewClient(c RuntimeConfig) (*Client, error) {
@@ -209,6 +210,16 @@ func (c *Client) call(ctx context.Context, request rpcRequest) (rpcResponse, err
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Drop-Cluster", c.clusterID)
+		c.mu.Lock()
+		if c.rpcCounts == nil {
+			c.rpcCounts = map[string]uint64{}
+		}
+		destination := "leader"
+		if address == c.local {
+			destination = "local"
+		}
+		c.rpcCounts[request.Method+"_"+destination]++
+		c.mu.Unlock()
 		httpClient := c.peerClient(address, id)
 		response, err := httpClient.Do(req)
 		if err != nil {
@@ -328,4 +339,14 @@ func (c *Client) peerClient(address netip.AddrPort, id string) *http.Client {
 	}
 	c.peers[key] = &client
 	return &client
+}
+
+func (c *Client) RPCMetrics() map[string]uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := map[string]uint64{}
+	for k, v := range c.rpcCounts {
+		out[k] = v
+	}
+	return out
 }

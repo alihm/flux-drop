@@ -36,6 +36,7 @@ type Tx struct {
 	writes          map[string]kv.Write
 	durability      kv.Durability
 	snapshot        bool
+	readOnly        bool
 	dependencyError error
 }
 
@@ -198,7 +199,7 @@ func (t *Tx) Get(key string, into any) error {
 }
 
 func (t *Tx) Set(key string, value any) error {
-	if t.snapshot {
+	if t.snapshot || t.readOnly {
 		return kv.ErrInvalid
 	}
 	t.classifyWrite(key, false)
@@ -223,7 +224,7 @@ func (t *Tx) Create(key string, value any) error {
 	return t.Set(key, value)
 }
 func (t *Tx) Delete(key string) error {
-	if t.snapshot {
+	if t.snapshot || t.readOnly {
 		return kv.ErrInvalid
 	}
 	t.classifyWrite(key, true)

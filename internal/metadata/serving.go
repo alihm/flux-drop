@@ -60,6 +60,8 @@ func (b frozenBackend) CoherentSnapshot() bool                       { return tr
 // preserves final post-IO snapshot checking for previews. negative is used only
 // for public slug absence, never private identities/authorization decisions.
 func (s *Store) RunServing(ctx context.Context, key string, negative, validate bool, fn func(*Tx) error) error {
+	callback := fn
+	fn = func(tx *Tx) error { tx.readOnly = true; return callback(tx) }
 	factory, ok := s.Backend.(interface{ ServingBackend() Backend })
 	if !ok {
 		if validate {
@@ -92,7 +94,7 @@ func (s *Store) RunServing(ctx context.Context, key string, negative, validate b
 		state.retries.Add(1)
 	}
 	if !missing {
-		if err != nil && !errors.Is(err, ErrNotFound) {
+		if dependencyErr != nil || err != nil && callbackErr == nil {
 			state.errors.Add(1)
 		}
 		return err
@@ -206,5 +208,11 @@ func (s *Store) RunServing(ctx context.Context, key string, negative, validate b
 func (s *Store) ServingMetrics() map[string]uint64 {
 	s.servingOnce.Do(func() { s.serving = newServingState() })
 	v := s.serving
-	return map[string]uint64{"confirmationAttempts": v.attempts.Load(), "confirmationCapDenials": v.denied.Load(), "localCoordinatorErrors": v.errors.Load(), "snapshotRetries": v.retries.Load()}
+	out := map[string]uint64{"confirmationAttempts": v.attempts.Load(), "confirmationCapDenials": v.denied.Load(), "localCoordinatorErrors": v.errors.Load(), "snapshotRetries": v.retries.Load()}
+	if rpc, ok := s.Backend.(interface{ RPCMetrics() map[string]uint64 }); ok {
+		for k, v := range rpc.RPCMetrics() {
+			out[k] = v
+		}
+	}
+	return out
 }

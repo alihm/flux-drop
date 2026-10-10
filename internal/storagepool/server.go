@@ -658,16 +658,11 @@ func (s *Secondary) file(w http.ResponseWriter, r *http.Request) {
 		defer f.Close()
 		// Verify the very descriptor that is served, including changes between the
 		// directory verification and open. Syncthing never supplies authorization.
-		h := sha256.New()
-		n, err := io.Copy(h, io.LimitReader(f, entry.Size+1))
-		if err != nil || n != entry.Size || hex.EncodeToString(h.Sum(nil)) != entry.SHA256 {
-			storageError(w, content.ErrInvalid)
-			return
-		}
-		if _, err = f.Seek(0, 0); err != nil {
+		if err := content.DescriptorHashes.Verify(r.Context(), f, r.PathValue("digest"), entry); err != nil {
 			storageError(w, err)
 			return
 		}
+
 		w.Header().Set("ETag", "\""+entry.SHA256+"\"")
 		http.ServeContent(w, r, name, time.Time{}, f)
 		return

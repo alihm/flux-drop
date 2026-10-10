@@ -28,11 +28,7 @@ func (p *Pool) AdminHandlerWithOperations(store *metadata.Store) http.Handler {
 				}
 				return nil
 			})
-			if err != nil {
-				storageError(w, err)
-				return
-			}
-			jsonReply(w, 200, map[string]any{"apps": p.appStatuses(), "allocations": allocations})
+			jsonReply(w, 200, map[string]any{"apps": p.appStatuses(), "allocations": allocations, "serving": p.ServingMetrics(), "partial": err != nil, "metadataAvailable": err == nil})
 			return
 		}
 		id, ok := strings.CutPrefix(r.URL.Path, "/api/storage/operations/")
