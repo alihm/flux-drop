@@ -78,3 +78,26 @@ Gzip covers HTML/CSS/JS/JSON/SVG/plain text, including internal file redirects.
 The shipped Nginx image has no Brotli module. Favicon returns 204 with cross-origin
 resource policy. Serving preparation keeps its existing 10-second budget; remote
 content fetches now inherit that budget as well.
+
+Serving plan baseline (2026-10-10)
+Baseline main SHA: 15f8309 (prior serving code plus accounting/reclamation).
+Implementation branch: serving-plan-implementation. No production load was run.
+Host: Linux amd64, Go 1.25.0, AMD EPYC, affinity CPUs 0-3, 5925 MiB RAM,
+8191 MiB swap; ext4 /dev/sda1, 3.5 GiB free of 96 GiB at baseline.
+Docker 28.5.2. Cgroup limit files were unavailable in this host namespace; these
+runs are not fixed-quota container measurements. No secondary latency inferred.
+Existing isolated handler fixture: 400 requests, concurrency 50, 20 previews,
+30 site assets, in-memory metadata. Command:
+  DROP_TEST_SERVING_LOAD=1 go test -v ./internal/httpserver -run '^TestServingLoadMeasurements$' -count=1
+Baseline milliseconds (p50/p95/p99): all 21.46/70.68/86.41;
+thumbnails 16.88/84.02/86.99; files 23.80/66.71/71.93. All 400 were 200.
+  go test ./internal/httpserver -run '^$' -bench BenchmarkSiteAssets -benchtime=300ms
+Baseline warm local asset preparation: 60533 ns/op (5674 iterations).
+These are handler measurements, not nginx transfer or maximum capacity.
+
+The load driver now accepts DROP_LOAD_PATHS pointing to a JSON array of paths,
+so cold measurements avoid HTML/Explore discovery. DROP_LOAD_TIMEOUT_MS defaults
+to 150000; DROP_LOAD_SLOW_MS pauses after chunks to emulate slow consumers.
+It reports real transport-error durations, elapsed time, total/successful rps,
+bytes and status counts. It is closed-loop and cannot establish maximum sustained
+capacity. Never use production as an unapproved load fixture.
