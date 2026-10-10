@@ -247,7 +247,12 @@ func (t *Tx) classifyWrite(key string, deleted bool) {
 	switch collection {
 	case "projects", "operations", "digests", "slugs", "quotas", "owner_projects":
 	default:
-		t.RequireReplication()
+		// Discovery-only publication indexes share the upload's durability.
+		// The coordinator independently binds each entry to its complete
+		// operation; authorization/removal/selection stay replicated.
+		if !strings.HasPrefix(collection, "versions_") {
+			t.RequireReplication()
+		}
 	}
 }
 func (t *Tx) finish() error {

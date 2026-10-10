@@ -27,6 +27,33 @@ func awaitAsync(t *testing.T, n *Node) {
 	await(t, func() bool { _, err := n.Read(context.Background(), []string{"health/ready"}); return err == nil })
 }
 
+func TestPublicationIndexRequiresMatchingCompleteOperation(t *testing.T) {
+	p := project.Project{ID: "site", Status: "reserved", PolicyRevision: 1}
+	tx := contentTransaction(t, "site", 0, p)
+	op := project.Operation{ID: "publication", ProjectID: p.ID, State: "complete"}
+	operation, _ := metadata.Encode(op)
+	index, _ := metadata.Encode(op.ID)
+	tx.Writes = append(tx.Writes, Write{Key: "operations/" + op.ID, Value: operation}, Write{Key: "versions_" + p.ID + "/" + op.ID, Value: index})
+	view := &state{records: map[string]Record{}}
+	if !localContentAllowed(tx, view) {
+		t.Fatal("publication index forced quorum acknowledgement")
+	}
+	tx.Writes[2].Key = "versions_other/" + op.ID
+	if localContentAllowed(tx, view) {
+		t.Fatal("foreign project index accepted")
+	}
+	tx.Writes[2].Key = "versions_" + p.ID + "/" + op.ID
+	op.State = "pending"
+	tx.Writes[1].Value, _ = metadata.Encode(op)
+	if localContentAllowed(tx, view) {
+		t.Fatal("incomplete publication indexed locally")
+	}
+	tx.Writes[2].Delete = true
+	if localContentAllowed(tx, view) {
+		t.Fatal("index removal acquired local acknowledgement")
+	}
+}
+
 func TestAsyncAcknowledgementAndSecurityBarrier(t *testing.T) {
 	g := newTestGroupMode(t, true)
 	leader := g.leader(t, -1)

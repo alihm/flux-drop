@@ -502,6 +502,7 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 	}
 	mux.Handle("DELETE /api/projects/{id}", mutate(remove(actor)))
 	mux.HandleFunc("DELETE /api/agent/projects/{id}", remove(bearerActor))
+	registerProjectRevisions(mux, deps, actor, bearerActor, mutate, respondProject)
 }
 
 var errRevisionRequired = errors.New("revision required")

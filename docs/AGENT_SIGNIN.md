@@ -404,6 +404,61 @@ for the public URL. Each single-project response has `ETag: "<revision>"`.
 | `PUT D/api/agent/projects/{id}/privacy` | `Content-Type: application/json`, `{"private":true,"password":"at least 12 characters"}` or `{"private":false}`; required `If-Match`. | 200 single-project envelope with updated privacy and incremented revision. |
 | `DELETE D/api/agent/projects/{id}` | No body; required `If-Match`. | 204, empty body. |
 
+### Published revision history
+
+These owner-only routes use the same Firebase Google bearer authentication as
+the project API above (no auth-time recency rule, cookies, CSRF or CORS).
+`drop_` publish keys receive 403. Equivalent browser-session routes replace
+`/api/agent/projects` with `/api/projects`; their mutations require the existing
+same-origin and CSRF checks.
+
+| Method and path | Request | Response |
+| --- | --- | --- |
+| `GET D/api/agent/projects/{id}/versions[?cursor=<nextCursor>]` | No body. | 200 `{"versions":[{"id":"<publication ID>","digest":"<SHA-256>","bytes":123,"createdAt":"<RFC3339>","active":false}],"nextCursor":"<cursor or empty>"}`. |
+| `POST D/api/agent/projects/{id}/versions/{version}/activate` | No body; required `If-Match: "<current project revision>"`. | 200 existing single-project envelope, including project revision/ETag, path and claimPath. |
+| `DELETE D/api/agent/projects/{id}/versions/{version}` | No body; required `If-Match`. | 200 same single-project envelope with incremented revision; the revision is immediately unavailable for selection. |
+
+`version` is the opaque publication `id` from the list, **not** the numeric
+project revision or digest. List pages contain at most 20 items, ordered by ID,
+not creation date. Continue until `nextCursor` is empty, including after an empty
+page. Raft instances build a project-specific discovery index during bounded
+maintenance passes. Until its first full pass completes, bounded scans of the
+existing operation history provide backward-compatible pagination. Old records
+without a publication timestamp use reservation time as an approximation.
+Unsuccessful uploads and removed/reclaimed revisions are excluded.
+
+Selection changes the serving pointer; it does not re-upload, copy files, alter
+ownership, slug, expiry, password, privacy or watermark settings, or charge the
+same storage again. Selecting the already active physical version is a no-op.
+Active-version deletion, stale `If-Match`, a pending upload, or another project's
+conflicting active digest returns 409 `project_conflict`. Missing `If-Match`
+returns 428 `revision_required`; inaccessible/deleted projects, foreign
+publication IDs and unavailable revisions return 404 `project_not_found`.
+Selections and removals serialize with retirement through the same metadata
+transaction, preventing activation after the physical identity has been fenced.
+
+Successful published revisions remain retained for rollback until explicitly
+removed or their project is deleted/expired. They continue to consume storage
+and quota. In legacy digest-addressed storage, repeated identical publications
+share one physical version; removing it removes all corresponding history
+entries, and it cannot be removed while active. Generation-addressed storage
+keeps separate physical identities, including for identical content.
+
+Project deletion still returns 204 and immediately denies access. All its names
+and historical aliases become reusable atomically with the tombstone; allocation
+also recognizes pre-upgrade tombstones. Repeating deletion never steals a reused
+name from its new project. Old URLs can therefore refer to a new user's project
+after that name is reused. Physical removal is asynchronous and requires the
+existing opt-in Syncthing reclamation configuration and all-member acknowledgements,
+not merely a successful DELETE. Refunds occur only after verified removal from
+every configured replica. Offline replicas, unverified legacy content and the
+one-hour version-age safety gate can delay cleanup. With reclamation disabled,
+files remain on disk. Standalone/local and Firestore storage currently fence
+removed versions but have no automatic filesystem reclamation worker.
+
+Upgrade all primaries before enabling reclamation with retained revision history:
+older primary images do not implement the explicit-removal retention guard.
+
 `If-Match` must contain exactly one quoted positive integer revision, for example
 `If-Match: "3"`, taken from the project JSON or ETag. Reads and mutations of another
 user's project return 404, just like an unknown project.

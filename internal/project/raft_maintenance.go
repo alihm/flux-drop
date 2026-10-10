@@ -65,11 +65,22 @@ func (s *RaftRepository) Maintain(ctx context.Context, cursors map[string]string
 	if !ok || cursors == nil {
 		return ErrInvalid
 	}
+	catalogReady := false
+	if err := s.run(ctx, func(ctx context.Context, tx *raftTx) error {
+		err := tx.tx.Get("revision_catalog/v1", &catalogReady)
+		if raftMissing(err) {
+			return nil
+		}
+		return err
+	}); err != nil {
+		return err
+	}
 	for _, prefix := range []string{"operations/", "projects/", "sessions/", "grants/", "unlock_budgets/"} {
 		page, err := scanner.Scan(ctx, prefix, cursors[prefix], 100)
 		if err != nil {
 			return err
 		}
+		completed := []string{}
 		for key, record := range page.Records {
 			id := strings.TrimPrefix(key, prefix)
 			switch prefix {
@@ -82,6 +93,9 @@ func (s *RaftRepository) Maintain(ctx context.Context, cursors map[string]string
 					if err := s.abort(ctx, nil, id, true); err != nil {
 						return err
 					}
+				}
+				if !catalogReady && op.State == "complete" {
+					completed = append(completed, id)
 				}
 			case "projects/":
 				var p Project
@@ -146,7 +160,25 @@ func (s *RaftRepository) Maintain(ctx context.Context, cursors map[string]string
 				}
 			}
 		}
+		if err := s.indexRevisions(ctx, completed); err != nil {
+			return err
+		}
 		cursors[prefix] = page.Next
+		if !catalogReady && prefix == "operations/" && page.Next == "" {
+			if err := s.run(ctx, func(ctx context.Context, tx *raftTx) error {
+				var done bool
+				err := tx.tx.Get("revision_catalog/v1", &done)
+				if err == nil && done {
+					return nil
+				}
+				if err != nil && !raftMissing(err) {
+					return err
+				}
+				return tx.Set("revision_catalog/v1", true)
+			}); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

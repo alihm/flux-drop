@@ -110,6 +110,13 @@ func TestReclamationAllMembersRefundExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = repo.RetireStorageVersion(ctx, first.Operation.StorageVersionKey, epoch, members); !errors.Is(err, ErrConflict) {
+		t.Fatal("history was not retained", err)
+	}
+	p, err = repo.RemoveRevision(ctx, actor, p.ID, first.Operation.ID, p.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
 	before := read()
 	v, err := repo.RetireStorageVersion(ctx, first.Operation.StorageVersionKey, epoch, members)
 	if err != nil {
@@ -262,6 +269,10 @@ func TestReclamationRefundsCurrentOwnerAfterClaim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	p, err = repo.RemoveRevision(ctx, actor, p.ID, first.Operation.ID, p.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
 	epoch := strings.Repeat("e", 64)
 	if _, err = repo.RetireStorageVersion(ctx, first.Operation.StorageVersionKey, epoch, []string{"member"}); err != nil {
 		t.Fatal(err)
@@ -304,7 +315,12 @@ func TestReclamationIncludesBlockSizeUplift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = repo.Activate(ctx, actor, second.Operation.ID); err != nil {
+	p, err = repo.Activate(ctx, actor, second.Operation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err = repo.RemoveRevision(ctx, actor, p.ID, first.Operation.ID, p.Revision)
+	if err != nil {
 		t.Fatal(err)
 	}
 	epoch := strings.Repeat("e", 64)

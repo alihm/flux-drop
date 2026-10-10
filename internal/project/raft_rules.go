@@ -153,11 +153,7 @@ func (s *RaftRepository) Reserve(ctx context.Context, a Actor, r Reservation) (P
 				return ErrConflict
 			}
 			p.Slug, p.InitialSuffix, err = chooseSlug(name, r.Digest, p.ID, func(slug string) (string, error) {
-				record, e := raftRead[slugRecord](tx, s.raftRef("slugs", slug))
-				if raftMissing(e) {
-					return "", nil
-				}
-				return record.ProjectID, e
+				return s.slugOwner(tx, slug)
 			})
 			if err != nil {
 				return err
@@ -233,7 +229,7 @@ func (s *RaftRepository) Reserve(ctx context.Context, a Actor, r Reservation) (P
 		p.PendingOperation = opID
 		if isNew {
 			q.Count++
-			if err := tx.Create(s.raftRef("slugs", p.Slug), slugRecord{p.ID}); err != nil {
+			if err := tx.Set(s.raftRef("slugs", p.Slug), slugRecord{p.ID}); err != nil {
 				return err
 			}
 		}
@@ -346,6 +342,7 @@ func (s *RaftRepository) activate(ctx context.Context, a Actor, opID, passwordDi
 		}
 		p.Revision++
 		op.State = "complete"
+		op.PublishedAt = s.now()
 		p.UpdatedAt = s.now()
 		if a.UploadTicketDigest != "" {
 			ticket, err := raftRead[AgentUploadTicket](tx, "agent_upload_tickets/"+a.UploadTicketDigest)
@@ -597,7 +594,7 @@ func (s *RaftRepository) Tombstone(ctx context.Context, a Actor, id string, revi
 		if err := s.clearTransfer(tx, id); err != nil {
 			return err
 		}
-		return tx.Set(s.raftRef("projects", id), p) // retain slug tombstone
+		return tx.Set(s.raftRef("projects", id), p) // slugOwner releases every alias atomically with this tombstone
 	})
 }
 
@@ -628,11 +625,7 @@ func (s *RaftRepository) Rename(ctx context.Context, a Actor, id, name string, r
 			seed = p.InitialSuffix + hash(p.ID)
 		}
 		slug, suffix, err := chooseSlug(name, seed, id, func(slug string) (string, error) {
-			record, e := raftRead[slugRecord](tx, s.raftRef("slugs", slug))
-			if raftMissing(e) {
-				return "", nil
-			}
-			return record.ProjectID, e
+			return s.slugOwner(tx, slug)
 		})
 		if err != nil {
 			return err
@@ -643,7 +636,14 @@ func (s *RaftRepository) Rename(ctx context.Context, a Actor, id, name string, r
 		}
 		alias, err := raftRead[slugRecord](tx, s.raftRef("slugs", slug))
 		newAlias := raftMissing(err)
-		if err != nil && !newAlias {
+		if err == nil && alias.ProjectID != id {
+			owner, e := s.slugOwner(tx, slug)
+			if e != nil {
+				return e
+			}
+			newAlias = owner == ""
+		}
+		if err != nil && !raftMissing(err) {
 			return err
 		}
 		if !newAlias && alias.ProjectID != id {
@@ -662,7 +662,7 @@ func (s *RaftRepository) Rename(ctx context.Context, a Actor, id, name string, r
 		p.PolicyRevision++
 		if newAlias {
 			p.AliasCount++
-			if err := tx.Create(s.raftRef("slugs", slug), slugRecord{ProjectID: id}); err != nil {
+			if err := tx.Set(s.raftRef("slugs", slug), slugRecord{ProjectID: id}); err != nil {
 				return err
 			}
 		}

@@ -111,6 +111,15 @@ New routes: `GET /.well-known/oauth-authorization-server`,
 `PUT /api/agent/uploads/{ticket}`. See the
 [exact integration contract, settings, storage and security](docs/AGENT_SIGNIN.md).
 
+Owners can list published revisions, select one to serve, or remove an inactive
+revision using `GET /api/agent/projects/{id}/versions`,
+`POST /api/agent/projects/{id}/versions/{version}/activate`, and
+`DELETE /api/agent/projects/{id}/versions/{version}`. Browser-session equivalents
+use `/api/projects`. Project deletion releases its names and aliases immediately;
+physical cleanup and refunds still require configured replica-aware reclamation.
+Retained revisions consume quota; refunds follow verified physical cleanup.
+See the revision history contract in the sign-in guide.
+
 ## Verify
 
 ```sh

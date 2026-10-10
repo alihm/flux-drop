@@ -122,6 +122,11 @@ func publishTwoGenerations(t *testing.T, pool *Pool) (*project.RaftRepository, p
 	if err != nil {
 		t.Fatal(err)
 	}
+	// These tests exercise cleanup of an explicitly removed historical revision.
+	second, err = repo.RemoveRevision(ctx, actor, first.ID, first.StorageGeneration, second.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
 	id := project.StorageVersionID(first.ID, first.ActiveDigest, first.StorageGeneration)
 	var old project.StorageVersion
 	if err = pool.store.Run(ctx, func(tx *metadata.Tx) error {
@@ -134,6 +139,57 @@ func publishTwoGenerations(t *testing.T, pool *Pool) (*project.RaftRepository, p
 		t.Fatal(err)
 	}
 	return repo, actor, second, old
+}
+
+func TestRestoredGenerationServesOriginalBytesAndProjectDeletionReclaimsAll(t *testing.T) {
+	s, _, pool := fixture(t, t.TempDir(), nil)
+	bindFakeSyncthing(t, s, testDevice("A"), []string{testDevice("A")})
+	pool.config.Reclamation = true
+	repo, actor := accountingRepository(t, pool)
+	ctx := context.Background()
+	publisher := &project.Publisher{Repository: repo, DataRoot: t.TempDir(), Installer: pool}
+	first, err := publisher.Publish(ctx, actor, project.Reservation{Key: "restore_first"}, stagedHTML(t, "<h1>First generation</h1>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := publisher.Publish(ctx, actor, project.Reservation{Key: "restore_second", ProjectID: first.ID, ExpectedRevision: first.Revision}, stagedHTML(t, "<h1>Second generation</h1>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := repo.SelectRevision(ctx, actor, first.ID, first.StorageGeneration, second.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	pool.ServeProject(w, httptest.NewRequest("GET", "/"+active.Slug+"/", nil), active, "index.html")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "<h1>First generation</h1>") {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if err = repo.Tombstone(ctx, actor, active.ID, active.Revision); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []project.Project{first, second} {
+		id := project.StorageVersionID(p.ID, p.ActiveDigest, p.StorageGeneration)
+		if err = pool.store.Run(ctx, func(tx *metadata.Tx) error {
+			var v project.StorageVersion
+			if err := tx.Get("storage_versions/"+id, &v); err != nil {
+				return err
+			}
+			v.CreatedAt = time.Now().Add(-2 * time.Hour)
+			return tx.Set("storage_versions/"+id, v)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = pool.ReclaimObsolete(ctx, "storagea", ""); err != nil {
+		t.Fatal(err)
+	}
+	if a := allocation(t, pool); a.Bytes != 0 || a.LiveBytes != 0 || a.Versions != 0 {
+		t.Fatal("deleted revision storage not refunded", a)
+	}
+	if _, err = os.Stat(filepath.Join(s.root, "projects", first.ID)); !os.IsNotExist(err) {
+		t.Fatal("deleted project files remain", err)
+	}
 }
 
 func TestReclamationRequiresAllReplicationMembersAndFencesRetries(t *testing.T) {

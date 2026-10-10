@@ -46,6 +46,27 @@ func (s *RaftRepository) RetireStorageVersion(ctx context.Context, id, epoch str
 		if p.Status != "deleted" && p.ExpiresAt != nil && !s.now().Before(*p.ExpiresAt) {
 			return ErrConflict
 		}
+		// Successful historical publications are kept for rollback until the
+		// owner explicitly removes them. Unknown legacy history is held too.
+		// Failed generation uploads may be reclaimed after durable abort.
+		if p.Status != "deleted" && v.State == "retained" {
+			_, removalErr := tx.Get("revision_removals/" + v.ID)
+			if removalErr != nil && !raftMissing(removalErr) {
+				return removalErr
+			}
+			if raftMissing(removalErr) {
+				if v.Generation == "" {
+					return ErrConflict
+				}
+				op, e := raftRead[Operation](tx, "operations/"+v.Generation)
+				if e != nil {
+					return e
+				}
+				if op.ProjectID != p.ID || op.StorageVersionKey != v.ID || op.State != "aborted" {
+					return ErrConflict
+				}
+			}
+		}
 		if v.State != "retained" && v.State != "retiring" {
 			return ErrConflict
 		}

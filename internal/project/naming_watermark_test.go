@@ -104,8 +104,8 @@ func TestNamingAndWatermarkTransactions(t *testing.T) {
 				t.Fatal(err)
 			}
 			replacement := publish("deleted_name", "clean-abcdef", strings.Repeat("e", 64))
-			if replacement.Slug == "clean-abcdef" {
-				t.Fatal("deleted URL hijacked")
+			if replacement.Slug != "clean-abcdef" {
+				t.Fatal("deleted name was not released")
 			}
 		})
 	}

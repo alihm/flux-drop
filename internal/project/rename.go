@@ -34,11 +34,7 @@ func (s *FirestoreRepository) Rename(ctx context.Context, a Actor, id, name stri
 			seed = p.InitialSuffix + hash(p.ID)
 		}
 		slug, suffix, err := chooseSlug(name, seed, id, func(slug string) (string, error) {
-			record, e := read[slugRecord](tx, s.ref("slugs", slug))
-			if missing(e) {
-				return "", nil
-			}
-			return record.ProjectID, e
+			return s.slugOwner(tx, slug)
 		})
 		if err != nil {
 			return err
@@ -49,7 +45,14 @@ func (s *FirestoreRepository) Rename(ctx context.Context, a Actor, id, name stri
 		}
 		alias, err := read[slugRecord](tx, s.ref("slugs", slug))
 		newAlias := missing(err)
-		if err != nil && !newAlias {
+		if err == nil && alias.ProjectID != id {
+			owner, e := s.slugOwner(tx, slug)
+			if e != nil {
+				return e
+			}
+			newAlias = owner == ""
+		}
+		if err != nil && !missing(err) {
 			return err
 		}
 		if !newAlias && alias.ProjectID != id {
@@ -68,7 +71,7 @@ func (s *FirestoreRepository) Rename(ctx context.Context, a Actor, id, name stri
 		p.PolicyRevision++
 		if newAlias {
 			p.AliasCount++
-			if err := tx.Create(s.ref("slugs", slug), slugRecord{ProjectID: id}); err != nil {
+			if err := tx.Set(s.ref("slugs", slug), slugRecord{ProjectID: id}); err != nil {
 				return err
 			}
 		}

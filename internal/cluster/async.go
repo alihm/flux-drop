@@ -226,7 +226,30 @@ func localContentAllowed(t Transaction, view *state) bool {
 			found = true
 		case "operations", "digests", "slugs", "quotas", "owner_projects":
 		default:
-			return false
+			// A publication's discovery index contains no authorization data;
+			// listing and selection re-read the project and complete operation.
+			// Bind it to an operation in this same transaction so arbitrary
+			// collections still cannot acquire local acknowledgement.
+			if !strings.HasPrefix(collection, "versions_") {
+				return false
+			}
+			var id string
+			if metadata.Decode(write.Value, &id) != nil {
+				return false
+			}
+			matched := false
+			for _, candidate := range t.Writes {
+				if candidate.Key != "operations/"+id || candidate.Delete {
+					continue
+				}
+				var op project.Operation
+				if metadata.Decode(candidate.Value, &op) == nil && op.ID == id && op.State == "complete" && write.Key == "versions_"+op.ProjectID+"/"+id {
+					matched = true
+				}
+			}
+			if !matched {
+				return false
+			}
 		}
 	}
 	return found

@@ -143,11 +143,7 @@ func (s *FirestoreRepository) Reserve(ctx context.Context, a Actor, r Reservatio
 				return ErrConflict
 			}
 			p.Slug, p.InitialSuffix, err = chooseSlug(name, r.Digest, p.ID, func(slug string) (string, error) {
-				record, e := read[slugRecord](tx, s.ref("slugs", slug))
-				if missing(e) {
-					return "", nil
-				}
-				return record.ProjectID, e
+				return s.slugOwner(tx, slug)
 			})
 			if err != nil {
 				return err
@@ -208,7 +204,7 @@ func (s *FirestoreRepository) Reserve(ctx context.Context, a Actor, r Reservatio
 		p.PendingOperation = opID
 		if isNew {
 			q.Count++
-			if err := tx.Create(s.ref("slugs", p.Slug), slugRecord{p.ID}); err != nil {
+			if err := tx.Set(s.ref("slugs", p.Slug), slugRecord{p.ID}); err != nil {
 				return err
 			}
 		}
@@ -295,6 +291,7 @@ func (s *FirestoreRepository) Activate(ctx context.Context, a Actor, opID string
 		}
 		p.Revision++
 		op.State = "complete"
+		op.PublishedAt = s.now()
 		p.UpdatedAt = s.now()
 		if err := tx.Set(s.ref("operations", opID), op); err != nil {
 			return err
@@ -641,6 +638,6 @@ func (s *FirestoreRepository) Tombstone(ctx context.Context, a Actor, id string,
 		p.Status = "deleted"
 		p.Revision++
 		p.PolicyRevision++
-		return tx.Set(s.ref("projects", id), p) // retain slug tombstone
+		return tx.Set(s.ref("projects", id), p) // deleted project releases all names through slugOwner
 	})
 }

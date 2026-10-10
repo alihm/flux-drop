@@ -110,6 +110,13 @@ func (t *raftTx) updateIndex(owner Owner, id string, add bool) error {
 	return t.tx.Set(key, idx)
 }
 func (t *raftTx) Set(key string, value any) error {
+	if strings.HasPrefix(key, "operations/") {
+		if op, ok := value.(Operation); ok && op.State == "complete" {
+			if err := t.tx.Set(revisionIndexPrefix(op.ProjectID)+op.ID, op.ID); err != nil {
+				return err
+			}
+		}
+	}
 	if strings.HasPrefix(key, "projects/") {
 		p, ok := value.(Project)
 		if !ok || key != "projects/"+p.ID {

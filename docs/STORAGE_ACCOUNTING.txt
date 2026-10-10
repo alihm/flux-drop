@@ -92,6 +92,13 @@ The version starting cleanup must be at least one hour old; active versions,
 reserved projects, unfinalized expiry,
 any pending publication, unverified legacy content and unknown state are held.
 Expired reservations alone do not authorize deletion.
+Successful historical publications in live projects are also held for rollback:
+only explicit owner revision removal authorizes their reclamation. Aborted
+generation uploads remain eligible after recovery. Deleted/expired projects
+make all their versions eligible, subject to these same safety gates. This is
+not synchronous DELETE: disabled reclamation still leaves bytes on disk.
+Upgrade all primaries before enabling cleanup; prior images do not implement
+the explicit-removal guard. Revision API contracts are in AGENT_SIGNIN.md.
 
 Every Syncthing device configured in the folder, including offline devices, must
 map to a distinct reachable upgraded secondary. All must report the same complete

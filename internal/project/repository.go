@@ -123,6 +123,7 @@ type Reservation struct {
 	StorageOperationID           string            `json:"-"`
 }
 type Operation struct {
+	PublishedAt       time.Time `firestore:"publishedAt,omitempty"`
 	ID                string    `firestore:"id"`
 	Fingerprint       string    `firestore:"fingerprint"`
 	Owner             Owner     `firestore:"owner"`

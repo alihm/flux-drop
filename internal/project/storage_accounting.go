@@ -134,6 +134,11 @@ func (s *RaftRepository) allocateMeasuredStorage(tx *raftTx, p *Project, r Reser
 }
 
 func (s *RaftRepository) checkStorageOperation(tx *raftTx, p Project, op Operation) error {
+	if _, err := tx.Get("revision_removals/" + revisionIdentity(op)); err == nil {
+		return ErrConflict
+	} else if !raftMissing(err) {
+		return err
+	}
 	if op.StorageGeneration == "" {
 		if err := s.checkNotRetired(tx, VersionRef{p.ID, op.Digest}); err != nil {
 			return err
