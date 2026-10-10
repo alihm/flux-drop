@@ -138,3 +138,8 @@ See [storage budgets](docs/STORAGE.md),
 [publishing APIs](docs/PUBLISHING.md), [agent browser sign-in and MCP APIs](docs/AGENT_SIGNIN.md), [frontend configuration](docs/FRONTEND.md),
 and [replica internals](docs/REPLICAS.md). Historical progress notes in those files
 are superseded by the staging runtime and deployment guides above.
+
+Project owners can open **Manage → Page views** for approximate hourly/daily HTML
+request counts, retained for 180 UTC days. Collection uses bounded memory-only
+increments on the serving path and independent background persistence. See
+[analytics API, privacy and resource limits](docs/STORAGE_POOL.md#approximate-page-view-analytics).

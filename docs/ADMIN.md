@@ -64,3 +64,10 @@ revocation. Primary/standalone Raft deployments additionally expose:
 
 CORS preflight OPTIONS is available on discovery, registration, token, revocation,
 connections and upload-link endpoints. These do not use the admin wallet session.
+
+Project owners have a **Page views** tab under Manage, with hourly and daily
+approximate counts for up to 180 UTC days. This feature is enabled by default on
+primaries and can be disabled with `DROP_ANALYTICS_ENABLED=false`. It collects no
+visitor identities, and its worker/storage failures do not affect site serving.
+Owner endpoints and operator resource/replication limits are documented in
+[STORAGE_POOL.md](STORAGE_POOL.md#approximate-page-view-analytics).

@@ -17,6 +17,7 @@ import (
 const sessionCookie = "__Host-drop-session"
 
 type Dependencies struct {
+	Analytics             ProjectAnalytics
 	Sessions              *session.Service
 	Projects              *project.Publisher
 	Fallback              ProjectFallback

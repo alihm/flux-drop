@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/runonflux/flux-drop/internal/analytics"
 	"github.com/runonflux/flux-drop/internal/content"
 	"github.com/runonflux/flux-drop/internal/httpserver"
 	"github.com/runonflux/flux-drop/internal/project"
@@ -59,7 +60,28 @@ func TestPrimaryCacheNginx(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := &deliveryRepository{value: pr.Project}
-	handler := httpserver.ProjectDeliveryWithAccess(repo, t.TempDir(), p, func(r *http.Request, _ project.Project) bool { return r.Header.Get("Test-Grant") == "valid" })
+	var views *analytics.Collector
+	var archive *analytics.Archive
+	if os.Getenv("DROP_TEST_ANALYTICS") == "1" {
+		archive, err = analytics.NewArchive(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer archive.Close()
+		if err = archive.Sweep(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		views, err = analytics.NewCollector("primary-test", t.TempDir(), nginxAnalytics{archive})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer views.Close()
+	}
+	var observer httpserver.ProjectAnalytics
+	if views != nil {
+		observer = views
+	}
+	handler := httpserver.ProjectDeliveryWithAnalytics(repo, t.TempDir(), p, func(r *http.Request, _ project.Project) bool { return r.Header.Get("Test-Grant") == "valid" }, observer)
 	listener, err := net.Listen("tcp", "127.0.0.1:8081")
 	if err != nil {
 		t.Fatal(err)
@@ -198,4 +220,22 @@ func TestPrimaryCacheNginx(t *testing.T) {
 	if res.StatusCode != 200 || body != payload || res.Header.Get("Cache-Control") != "no-store" || res.Header.Get("Access-Control-Allow-Origin") != "" || res.Header.Get("Cross-Origin-Resource-Policy") != "same-origin" {
 		t.Fatal("private headers", res.StatusCode, res.Header)
 	}
+
+	if views != nil && os.Getenv("DROP_TEST_PRIMARY_LOAD") != "1" {
+		views.Flush(context.Background())
+		now := time.Now().UTC()
+		result, e := archive.Query(context.Background(), analytics.Query{ProjectID: pr.Project.ID, From: analytics.Day(now), To: analytics.Day(now).Add(24 * time.Hour), Interval: "hour"})
+		if e != nil || result.PageViews != 4 {
+			t.Fatal("nginx analytics did not match HTML/304/private views", result, e)
+		}
+	}
+}
+
+type nginxAnalytics struct{ archive *analytics.Archive }
+
+func (s nginxAnalytics) SubmitPageViews(ctx context.Context, snapshot analytics.Snapshot) error {
+	return s.archive.Accept(ctx, snapshot)
+}
+func (s nginxAnalytics) PageViews(ctx context.Context, query analytics.Query) (analytics.Result, error) {
+	return s.archive.Query(ctx, query)
 }

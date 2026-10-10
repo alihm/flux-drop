@@ -16,6 +16,7 @@ import (
 	firebase "firebase.google.com/go/v4"
 
 	"github.com/runonflux/flux-drop/internal/admin"
+	"github.com/runonflux/flux-drop/internal/analytics"
 	"github.com/runonflux/flux-drop/internal/cluster"
 	"github.com/runonflux/flux-drop/internal/content"
 	"github.com/runonflux/flux-drop/internal/firebaseconfig"
@@ -107,6 +108,11 @@ func run() error {
 	}
 	var projects project.Repository
 	var servingStore *metadata.Store
+	var pageViews *analytics.Collector
+	enabledAnalytics := get("DROP_ANALYTICS_ENABLED")
+	if enabledAnalytics != "" && enabledAnalytics != "true" && enabledAnalytics != "false" {
+		return errors.New("DROP_ANALYTICS_ENABLED must be true or false")
+	}
 	maintenanceEnabled := get("DROP_MAINTENANCE_ENABLED")
 	if maintenanceEnabled != "" && maintenanceEnabled != "true" && maintenanceEnabled != "false" {
 		return errors.New("DROP_MAINTENANCE_ENABLED must be true or false")
@@ -131,6 +137,24 @@ func run() error {
 			return err
 		}
 		defer client.Close()
+		if publishing.enabled && enabledAnalytics != "false" {
+			// Separate HTTP pools/routing state keep background analytics retries
+			// from perturbing management or serving metadata traffic.
+			analyticsClient, clientErr := cluster.NewClient(c)
+			if clientErr != nil {
+				slog.Warn("page-view analytics disabled: cluster client unavailable")
+			} else {
+				pageViews, err = analytics.NewCollector(c.Local.ID, cluster.StateDirectory+"/private/analytics-outbox", analyticsClient)
+				if err != nil {
+					analyticsClient.Close()
+					slog.Warn("page-view analytics disabled: local outbox unavailable")
+				} else {
+					dependencies.Analytics = pageViews
+					defer analyticsClient.Close()
+					defer pageViews.Close()
+				}
+			}
+		}
 		verifier, err := session.NewPublicFirebaseVerifier(context.Background(), projectID)
 		if err != nil {
 			return err
@@ -259,6 +283,12 @@ func run() error {
 		}()
 		defer func() { stop(); <-done }()
 	}
+	if pageViews != nil {
+		analyticsCtx, cancelAnalytics := context.WithCancel(ctx)
+		analyticsDone := make(chan struct{})
+		go func() { defer close(analyticsDone); pageViews.Run(analyticsCtx) }()
+		defer func() { cancelAnalytics(); <-analyticsDone }()
+	}
 	var peerErrors <-chan error
 	if storage != nil {
 		dependencies.Fallback = storage
@@ -316,10 +346,21 @@ func run() error {
 	}
 	httpserver.StartDebugListener(ctx, func() any {
 		if storage != nil {
-			return storage.ServingMetrics()
+			result := storage.ServingMetrics()
+			if pageViews != nil {
+				result["analytics"] = pageViews.Metrics()
+			}
+			return result
 		}
 		if servingStore != nil {
-			return servingStore.ServingMetrics()
+			result := map[string]any{}
+			for key, value := range servingStore.ServingMetrics() {
+				result[key] = value
+			}
+			if pageViews != nil {
+				result["analytics"] = pageViews.Metrics()
+			}
+			return result
 		}
 		return map[string]any{"available": false}
 	})

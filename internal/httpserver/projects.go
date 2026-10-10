@@ -169,6 +169,7 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 	mux.Handle("POST /api/projects", mutate(upload(false, actor)))
 	mux.Handle("POST /api/projects/{id}/versions", mutate(upload(true, actor)))
 	bearerActor := projectBearerActor(deps, false)
+	registerAnalytics(mux, deps, actor, bearerActor)
 	mux.HandleFunc("POST /api/agent/projects", withAgentUploadKey(upload(false, projectBearerActor(deps, true))))
 	mux.HandleFunc("POST /api/agent/projects/{id}/versions", withAgentUploadKey(upload(true, bearerActor)))
 	if keys, ok := deps.Projects.Repository.(interface {

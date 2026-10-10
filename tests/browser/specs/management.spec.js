@@ -91,3 +91,41 @@ test('content replacement displays file validation diagnostics', async ({page}) 
   await page.getByRole('button',{name:'Manage',exact:true}).click();await page.getByRole('button',{name:'Settings',exact:true}).click();
   await expect(page.getByLabel('Show Powered by RunOnFlux')).not.toBeChecked();
  });
+
+test('page views load only when opened, show a chart and switch to hourly counts', async ({page}) => {
+  await setup(page);
+  await page.route('**/api/config', route => route.fulfill({json: {publishingEnabled: true, authenticationEnabled: true, analyticsEnabled: true, limits: {uploadBytes: 52428800, files: 5000}}}));
+  let requests = 0;
+  await page.route(`**/api/projects/${id}/analytics?*`, async route => {
+    requests++;
+    const query = new URL(route.request().url()).searchParams;
+    expect(query.get('interval')).toBe(requests === 1 ? 'day' : 'hour');
+    await route.fulfill({json: {projectId: id, timezone: 'UTC', approximate: true, pageViews: 42, updatedAt: '2026-10-10T12:00:00Z', buckets: [{start: '2026-10-10T12:00:00Z', pageViews: 42}]}});
+  });
+  await open(page); expect(requests).toBe(0);
+  await page.getByRole('button', {name: 'Page views', exact: true}).click();
+  await expect(page.locator('.analytics-total')).toHaveText('42 page views');
+  await expect(page.getByRole('img', {name: 'Daily page views'})).toBeVisible();
+  await page.getByLabel('Page-view period').selectOption('24h');
+  await expect(page.getByRole('img', {name: 'Hourly page views'})).toBeVisible();
+  await page.getByText('View counts by hour', {exact: true}).click();
+  await expect(page.locator('.analytics-table')).toContainText('2026-10-10 12:00');
+  expect(requests).toBe(2);
+});
+
+test('page-view failures can be retried without blocking management', async ({page}) => {
+  await setup(page);
+  await page.route('**/api/config', route => route.fulfill({json: {publishingEnabled: true, authenticationEnabled: true, analyticsEnabled: true, limits: {uploadBytes: 52428800, files: 5000}}}));
+  let requests = 0;
+  await page.route(`**/api/projects/${id}/analytics?*`, route => {
+    requests++;
+    return requests === 1 ? route.fulfill({status: 503, json: {error: 'analytics_unavailable'}}) : route.fulfill({json: {pageViews: 0, updatedAt: null, buckets: []}});
+  });
+  await open(page); await page.getByRole('button', {name: 'Page views', exact: true}).click();
+  await expect(page.locator('.analytics-status')).toContainText('temporarily unavailable');
+  await page.getByRole('button', {name: 'Refresh page views', exact: true}).click();
+  await expect(page.locator('.analytics-total')).toHaveText('0 page views');
+  await expect(page.locator('.analytics-result')).toContainText('No page views recorded');
+  await page.getByRole('button', {name: 'Settings', exact: true}).click();
+  await expect(page.getByLabel('New site name')).toBeVisible();
+});

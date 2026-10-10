@@ -122,6 +122,18 @@ assert.equal(contentWithoutWatermark((await serving(path,{headers:navigation},re
 compose('restart','--no-deps','one','two','three');
 for(const value of Object.values(bases)){base=value;await ready()}
 assert.equal(contentWithoutWatermark((await serving(path,{headers:navigation},revised)).data),revised);
+// A real image collects serving requests, persists an outbox and submits over
+// authenticated cluster RPC. Analytics may lag; management ownership stays live.
+for (const deadline=Date.now()+30000;;) {
+ const report=await call('/api/projects/'+p.id+'/analytics',{status:null});
+ if(report.r.status===200&&report.data.pageViews>0){
+  assert.equal(report.data.projectId,p.id);assert.equal(report.data.timezone,'UTC');
+  assert.equal(report.data.approximate,true);assert.equal(report.data.buckets.length,7);break;
+ }
+ if(Date.now()>=deadline)throw Error('image page views did not become visible: '+JSON.stringify(report.data));
+ await new Promise(resolve=>setTimeout(resolve,500));
+}
+console.log('PASS: final-image HTML page views via durable outbox, authenticated leader RPC and owner analytics API');
 await call('/api/projects/'+p.id,{method:'DELETE',headers:{'If-Match':'"'+p.revision+'"'},status:204});
 await serving(path,{anonymous:true,status:404});
 const oldCookie=cookies.get('__Host-drop-session');

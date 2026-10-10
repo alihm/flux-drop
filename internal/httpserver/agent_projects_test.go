@@ -42,7 +42,7 @@ func (v projectSessionVerifier) VerifyGoogle(ctx context.Context, raw string) (s
 }
 func (v projectSessionVerifier) CheckAccount(context.Context, session.Identity) error { return nil }
 
-func firebaseProjectHarness(t *testing.T, oauthEnabled bool) *oauthHarness {
+func firebaseProjectHarness(t *testing.T, oauthEnabled bool, analytics ...ProjectAnalytics) *oauthHarness {
 	t.Helper()
 	h := newOAuthHarness(t)
 	verifier := h.auth.verifier.(*session.AgentFirebaseVerifier)
@@ -50,6 +50,9 @@ func firebaseProjectHarness(t *testing.T, oauthEnabled bool) *oauthHarness {
 		Sessions: &session.Service{Store: &session.RaftStore{Store: h.auth.Repository.Store, CreationsPerMinute: 60}, Verifier: projectSessionVerifier{verifier}, Now: h.auth.now},
 		Projects: &project.Publisher{Repository: h.auth.Repository, DataRoot: t.TempDir()}, StagingRoot: t.TempDir(),
 		ProjectBearerVerifier: verifier,
+	}
+	if len(analytics) > 0 {
+		deps.Analytics = analytics[0]
 	}
 	if oauthEnabled {
 		deps.AgentAuth = h.auth

@@ -339,3 +339,99 @@ allocation metadata is unavailable (`partial: true`, `metadataAvailable: false`)
 The loopback-only profiling listener also exposes `/debug/serving`; never publish
 port 6060. Metrics have no path/user/token labels. Slow-request logs are bounded
 by a process-wide rate limiter and omit query strings and upload ticket paths.
+
+## Approximate page-view analytics
+
+Primary/standalone Raft deployments collect page views by default. Secondaries do
+not collect analytics. `DROP_ANALYTICS_ENABLED=false` disables collection and the
+Manage page's **Page views** tab. No new required settings, keys or ports exist.
+`GET /api/config` includes `analyticsEnabled`.
+
+A page view is a successful authorized HTML GET (200 or 304), including nested
+HTML pages and unlocked private pages. HEAD, partial/range requests, redirects,
+failures, assets, API calls, thumbnails and the internal screenshot renderer do
+not count. Browser requests with a non-document/non-iframe `Sec-Fetch-Dest` and
+explicit prefetch/prerender requests are excluded. Clients without fetch metadata,
+including bots/curl, count. No IPs, cookies, query strings, paths, emails, UIDs or
+visitor identifiers enter analytics. These are page requests, not unique people.
+Browser/upstream cache hits that bypass Drop are invisible. Go records successful
+nginx handoffs before nginx finishes transferring bytes; a later nginx/client
+failure can therefore overcount. No JavaScript is injected into deployed sites.
+
+Each primary increments sharded in-memory counters. An independent worker captures
+cumulative hourly snapshots approximately every ten seconds (small random jitter
+avoids synchronized retries), fsyncs a private outbox, and submits via the existing
+membership-checked mTLS coordinator RPC to the leader. Separate clients keep
+analytics HTTP pools/routing independent of metadata traffic. Analytics performs
+no Raft transactions and never participates in site authorization or readiness.
+Worker failure, full queues, quotas and missing leaders must not block serving.
+
+Snapshots have a fresh random producer ID per process boot, stable node ID, UTC
+day/shard, monotonic sequence, timestamp and project-ID -> 24 hourly counters.
+Within one producer/day/shard, only the highest sequence is used; different
+producers add. Thus retries, lost ACKs, restarts and delayed lower generations
+cannot double-count. Cumulative snapshots replace the initially suggested reset
+and mutable-leader-total design: concurrent old/new leaders never overwrite a
+shared authoritative total. Two immutable generations are retained per source.
+The leader aggregates these snapshots for owner queries, with a bounded five-
+second result cache; every query still performs management ownership checks.
+
+The coordinator writes immutable JSON files under
+`/data/analytics/YYYY-MM-DD/<hex-shard>/`, named
+`<node>.<producer>.<sequence>.json`, on the primary's existing replicated `/data`
+volume. Files contain aggregated counts only. Grouping projects into 16 shards
+avoids creating one file per project per flush. Private unacknowledged snapshots
+are under `/var/lib/drop-cluster/private/analytics-outbox` and survive local
+restart, without being copied between node identities. Acknowledgement requires
+local file and directory fsync, not a second synced primary. Complete node loss
+before volume replication can lose acknowledged data. Replication/leader changes
+can temporarily reduce visible counts; analytics are explicitly approximate.
+
+Retention is **180 UTC days including today** (a precise bounded approximation
+of six months). Old snapshots are excluded immediately by query validation and
+removed by an hourly background sweep, up to 4096 old files per pass. Expired
+retry batches are acknowledged and discarded. Project renames/version updates
+retain history by stable project ID. Deleted projects cannot be queried; a new
+owner after transfer can see the project's retained history.
+
+Fixed bounds protect delivery: 1024 projects per shard/day, 16 shards, two days
+of active counters; 256 private pending files/32 MiB plus one bounded atomic-write
+temporary; snapshot size at most 768 KiB. A worker tick has a five-second budget,
+32 send attempts, fair shard ordering, and a two-second best-effort final flush.
+Old uncaptured counters and views beyond admission bounds may be dropped.
+The archive admits at most 1 GiB/65536 tracked allocated files, checks 1 GiB disk
+and 1024 inode headroom before writes, and limits writes to 1 MiB/s. External
+volume replication can temporarily exceed the tracked quota until the next
+accounting sweep; filesystem quotas remain an operator concern. Reads are limited
+to two concurrent queries and 4 MiB/s, 64 MiB/4096 snapshot files per query, with
+at most 128 producers per day/shard and 512 directory entries. Heavy or unavailable
+analytics return retryable 503; they do not change site response behavior. These
+bounds can make analytics incomplete under sustained pressure. Loopback-only
+`/debug/serving` includes collection/drop/error/pending counters. The archive
+folder must remain outside nginx aliases and public API paths.
+
+### Owner endpoints
+
+| Method | Endpoint | Authentication |
+| --- | --- | --- |
+| GET | `/api/projects/{id}/analytics` | Existing browser owner session; read-only, no CSRF |
+| GET | `/api/agent/projects/{id}/analytics` | Live Google Firebase ID bearer; no session/cookies/CSRF/CORS; `drop_` keys receive 403 |
+
+Both accept optional `from` and `to` RFC3339 timestamps (inclusive/exclusive,
+aligned to UTC hours), and `interval=hour` or `day`. Daily ranges start at UTC
+midnight; the final day can be partial. Defaults: the last seven UTC dates,
+including today, with daily buckets. The maximum range is the retained 180 days;
+`to` cannot exceed tomorrow midnight UTC. Empty hours/days return zero buckets.
+The response is the same on both endpoints, with no-store caching:
+
+```json
+{"projectId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","timezone":"UTC","approximate":true,"interval":"day","from":"2026-10-10T00:00:00Z","to":"2026-10-11T00:00:00Z","updatedAt":"2026-10-10T13:00:00Z","pageViews":42,"buckets":[{"start":"2026-10-10T00:00:00Z","pageViews":42}]}
+```
+
+`updatedAt` is the latest included producer snapshot, not a completeness promise;
+it is null before any snapshot for the project. Errors: existing authentication
+401/provider or key-policy 403, non-owner/deleted project 404, invalid range 400
+`invalid_request`, or 503 `analytics_unavailable` with `Retry-After: 5`. An unknown
+project is never exposed through analytics. The UI fetches only when its tab is
+opened; the hourly chart/table and 7/30/180-day ranges are rendered locally using
+CSP-hashed assets without third-party analytics services.

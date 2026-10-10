@@ -112,7 +112,8 @@ func NewWithDependencies(c Config, dependencies Dependencies) (http.Handler, err
 			Firebase              *FirebaseWebConfig `json:"firebase,omitempty"`
 			AgentAuthEnabled      bool               `json:"agentAuthEnabled"`
 			ExploreEnabled        bool               `json:"exploreEnabled"`
-		}{PublicOrigin: c.PublicOrigin, Limits: c.Limits, PublishingEnabled: dependencies.Projects != nil, AuthenticationEnabled: dependencies.Sessions != nil, Firebase: dependencies.FirebaseWeb, ExploreEnabled: dependencies.Previews != nil, AgentAuthEnabled: dependencies.AgentAuth != nil})
+			AnalyticsEnabled      bool               `json:"analyticsEnabled"`
+		}{AnalyticsEnabled: dependencies.Analytics != nil, PublicOrigin: c.PublicOrigin, Limits: c.Limits, PublishingEnabled: dependencies.Projects != nil, AuthenticationEnabled: dependencies.Sessions != nil, Firebase: dependencies.FirebaseWeb, ExploreEnabled: dependencies.Previews != nil, AgentAuthEnabled: dependencies.AgentAuth != nil})
 	})
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
@@ -121,7 +122,7 @@ func NewWithDependencies(c Config, dependencies Dependencies) (http.Handler, err
 	})
 	var delivery http.Handler
 	if dependencies.Projects != nil {
-		delivery = ProjectDeliveryWithAccess(dependencies.Projects.Repository, dependencies.Projects.DataRoot, dependencies.Fallback, privateAccess)
+		delivery = ProjectDeliveryWithAnalytics(dependencies.Projects.Repository, dependencies.Projects.DataRoot, dependencies.Fallback, privateAccess, dependencies.Analytics)
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if dependencies.Projects != nil && deliverySlug.MatchString(strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")[0]) {

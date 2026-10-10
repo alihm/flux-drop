@@ -1066,6 +1066,60 @@
   }
   function note(parent, text) { const p = document.createElement('p'); p.textContent = text; parent.append(p); return p; }
 
+  function showPageViews(panel, projectId) {
+    const title = document.createElement('h3'); title.textContent = 'Page views'; panel.append(title);
+    note(panel, 'Approximate HTML page requests reaching Drop, including bots and reloads. Cached visits may not reach us. Times are UTC; updates can be delayed. No visitor identifiers are collected.');
+    const label = document.createElement('label'); label.textContent = 'Period';
+    const period = document.createElement('select'); period.setAttribute('aria-label', 'Page-view period');
+    for (const [value, text] of [['24h', 'Last 24 hours'], ['7', 'Last 7 days'], ['30', 'Last 30 days'], ['180', 'Last 180 days']]) {
+      const option = document.createElement('option'); option.value = value; option.textContent = text; period.append(option);
+    }
+    period.value = '7'; label.append(period); panel.append(label);
+    const refresh = addButton(panel, 'Refresh page views', 'secondary', () => void load());
+    const status = document.createElement('p'); status.className = 'analytics-status'; status.setAttribute('role', 'status'); panel.append(status);
+    const result = document.createElement('div'); result.className = 'analytics-result'; panel.append(result);
+    let controller, requestId = 0;
+    dialog.addEventListener('close', () => controller?.abort(), {once: true});
+    async function load() {
+      const request = ++requestId; controller?.abort(); controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      refresh.disabled = true; status.textContent = 'Loading page views…'; result.replaceChildren();
+      const now = new Date(), today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+      let from, to, interval;
+      if (period.value === '24h') { to = new Date(Math.floor(now.getTime() / 3600000) * 3600000 + 3600000); from = new Date(to.getTime() - 24 * 3600000); interval = 'hour'; }
+      else { to = new Date(today.getTime() + 86400000); from = new Date(to.getTime() - Number(period.value) * 86400000); interval = 'day'; }
+      try {
+        const query = new URLSearchParams({from: from.toISOString(), to: to.toISOString(), interval});
+        const response = await fetch('/api/projects/' + projectId + '/analytics?' + query, {signal: controller.signal});
+        if (!response.ok) throw new Error(response.status === 404 ? 'This site is no longer available in your account.' : 'Page views are temporarily unavailable. Please try again.');
+        const data = await response.json();
+        if (request !== requestId || !panel.isConnected) return;
+        if (!Number.isSafeInteger(data.pageViews) || !Array.isArray(data.buckets) || data.buckets.length > 4320 || !data.buckets.every(bucket => Number.isSafeInteger(bucket.pageViews) && bucket.pageViews >= 0 && Number.isFinite(Date.parse(bucket.start)))) throw new Error('Page views are temporarily unavailable. Please try again.');
+        const total = document.createElement('p'); total.className = 'analytics-total'; total.textContent = data.pageViews.toLocaleString() + ' page views'; result.append(total);
+        if (data.pageViews > 0) {
+          const ns = 'http://www.w3.org/2000/svg', chart = document.createElementNS(ns, 'svg');
+          chart.setAttribute('viewBox', '0 0 720 160'); chart.setAttribute('role', 'img'); chart.setAttribute('aria-label', interval === 'hour' ? 'Hourly page views' : 'Daily page views'); chart.classList.add('analytics-chart');
+          const max = Math.max(1, ...data.buckets.map(bucket => bucket.pageViews)), width = 720 / Math.max(1, data.buckets.length);
+          data.buckets.forEach((bucket, index) => {
+            const bar = document.createElementNS(ns, 'rect'), height = bucket.pageViews / max * 150;
+            bar.setAttribute('x', String(index * width)); bar.setAttribute('y', String(160 - height)); bar.setAttribute('width', String(Math.max(.5, width - 2))); bar.setAttribute('height', String(height)); bar.setAttribute('rx', '2');
+            const caption = document.createElementNS(ns, 'title'); caption.textContent = bucket.start + ': ' + bucket.pageViews; bar.append(caption); chart.append(bar);
+          }); result.append(chart);
+        } else note(result, 'No page views recorded in this period.');
+        const details = document.createElement('details'), summary = document.createElement('summary'); summary.textContent = 'View counts by ' + (interval === 'hour' ? 'hour' : 'day'); details.append(summary);
+        const table = document.createElement('table'); table.className = 'analytics-table';
+        const heading = document.createElement('tr'); for (const text of ['Time (UTC)', 'Page views']) { const th = document.createElement('th'); th.textContent = text; heading.append(th); } table.append(heading);
+        for (const bucket of data.buckets) { const row = document.createElement('tr'); for (const text of [bucket.start.replace('T', ' ').slice(0, interval === 'hour' ? 16 : 10), bucket.pageViews.toLocaleString()]) { const cell = document.createElement('td'); cell.textContent = text; row.append(cell); } table.append(row); }
+        details.append(table); result.append(details);
+        const updated = data.updatedAt && Number.isFinite(Date.parse(data.updatedAt)) ? new Date(data.updatedAt).toLocaleString() : null;
+        status.textContent = updated ? 'Latest included snapshot: ' + updated + '. Counts are approximate.' : 'No snapshots received yet. Counts are approximate.';
+      } catch (error) {
+        if (request === requestId && panel.isConnected) status.textContent = error.name === 'AbortError' ? 'The request timed out. Please try again.' : error.message;
+      } finally { clearTimeout(timeout); if (request === requestId) refresh.disabled = false; }
+    }
+    period.addEventListener('change', () => void load()); void load();
+  }
+
   function openManager(project, trigger) {
     if (managing) return;
     modalTrigger = trigger;
@@ -1075,10 +1129,14 @@
     const tabs = document.createElement('div'); tabs.className = 'manage-tabs';
     const panels = document.createElement('div');
     const tabItems = [];
-    for (const [name, title] of [['content', 'Content'], ['access', 'Access'], ['share', 'Share'], ['settings', 'Settings']]) {
+    const managerTabs = [['content', 'Content'], ['access', 'Access'], ['share', 'Share'], ['settings', 'Settings']];
+    if (config?.analyticsEnabled) managerTabs.push(['analytics', 'Page views']);
+    let analyticsLoaded = false;
+    for (const [name, title] of managerTabs) {
       const panel = document.createElement('section'); panel.className = 'manage-panel'; panel.hidden = name !== 'content';
       const tab = addButton(tabs, title, '', () => {
         for (const item of tabItems) { item.panel.hidden = item.name !== name; item.tab.setAttribute('aria-pressed', String(item.name === name)); }
+        if (name === 'analytics' && !analyticsLoaded) { analyticsLoaded = true; showPageViews(panel, project.id); }
       });
       tab.setAttribute('aria-pressed', String(name === 'content'));
       tabItems.push({name, tab, panel}); panels.append(panel);

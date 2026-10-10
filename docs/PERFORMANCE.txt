@@ -230,3 +230,52 @@ not an end-to-end claim. The mixed handler follow-up overlapped other fixture
 work and is not used as controlled evidence. Production HTTPS/TLS/Flux network,
 real Syncthing lag, long clients/large sites and maximum sustainable capacity
 remain live acceptance measurements, outside this authorized local exercise.
+
+Approximate page-view analytics (2026-10-10)
+------------------------------------------
+Five quiet-host runs, Linux amd64 / AMD EPYC / GOMAXPROCS=4, Go 1.25.0.
+These are local microbenchmarks, not Flux production or network latency claims.
+
+Commands:
+  go test ./internal/analytics -run '^$' -bench '^BenchmarkRecordPageView' \
+    -benchmem -benchtime=500ms -count=5
+  go test ./internal/httpserver -run '^$' -bench '^BenchmarkHTMLDeliveryAnalytics$' \
+    -benchmem -benchtime=500ms -count=5
+
+Existing project counter, serial: 331.8-393.7 ns/view, median 375.9;
+parallel: 160.8-285.9 ns/view, median 210.6. Both 0 B/view, 0 allocations/view.
+The counter performs no disk/network IO and starts no goroutine per request.
+A race test blocks SubmitPageViews and verifies another 1000 Record calls finish
+without waiting for that network call. Sharded locks and atomic counters protect
+concurrent capture; retry/lost-ACK/restart tests verify cumulative replacement.
+
+Complete warm local HTML handler (including httptest request/response creation,
+authorization fixture, integrity readiness and file response), five runs:
+  disabled: 41.755-50.093 us/op, median 42.313; 74 allocations/op.
+  enabled:  46.255-56.840 us/op, median 52.728; 77 allocations/op.
+Median difference: 10.415 us/op (+24.6% for this small handler fixture), about
+350 additional B/op. This includes the response observer and timing/counter work,
+not just Record. It is measurable overhead; it is not a zero-cost feature.
+No background flush was active during these microbenchmarks. Sustained archive
+IO, actual Syncthing replication lag and production load remain live acceptance
+measurements. Background quotas, rate budgets, bounded admission and independent
+HTTP pools isolate failures; counts can be incomplete under overload.
+
+Validation on the final analytics source/image:
+  go test -race ./...; go vet ./...; go build ./cmd/...: passed.
+  Browser suite: 153 passed across Chromium/Firefox/WebKit, including lazy owner
+  analytics loading, chart/table rendering, hourly selection and retry on 503.
+  tests/delivery/Dockerfile, DROP_TEST_NGINX=1 DROP_TEST_ANALYTICS=1:
+  both production delivery and primary-cache nginx suites passed. The observer
+  recorded exactly four eligible HTML 200/304 handoffs; HEAD/range/assets and
+  unauthorized private requests were excluded.
+  tests/storagepool/smoke.mjs --image flux-drop:analytics-test: passed; primary
+  and secondary public boundaries, supervision, restart identity and readiness.
+  tests/raft/run.mjs: passed on three actual final-image primaries, including
+  owner analytics after full restart, authenticated leader routing, existing
+  cross-node sessions/publishing/privacy/deletion and local quorum-loss serving.
+  The Raft fixture shares a local disposable content volume; it validates the
+  protocol/runtime, not actual Syncthing transfer lag or remote-disk durability.
+  Final image: sha256:5643324aaf07073e61de6583fb51cf5cb207eef42420b1308830f35639c70eca.
+  All test containers and volumes were disposable and removed. No production
+  traffic, credentials, deployment or image push was used.

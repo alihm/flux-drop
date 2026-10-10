@@ -585,3 +585,21 @@ accounts or automated real-user login.
 References: [MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization),
 [RFC 8252 native callbacks](https://www.rfc-editor.org/rfc/rfc8252),
 [Firebase refresh-token exchange](https://firebase.google.com/docs/reference/rest/auth#section-refresh-token).
+
+### Firebase bearer page-view analytics
+
+`GET /api/agent/projects/{id}/analytics?from=<RFC3339>&to=<RFC3339>&interval=hour`
+uses the same Google Firebase bearer and owner isolation as the project API above.
+Cookies/CSRF/Origin do not authenticate it; no CORS headers or cookies are sent.
+Publish-only `drop_` keys receive 403. No `If-Match` or body is needed.
+
+The response is `{projectId,timezone:"UTC",approximate:true,interval,from,to,
+updatedAt,pageViews,buckets:[{start,pageViews}]}`. `updatedAt` can be null. Counts
+are approximate HTML requests reaching Drop, including bots/reloads, not unique
+visitors; cached visits can be invisible. Defaults are seven UTC dates/daily
+buckets; choose `hour` for hourly data. Ranges are hourly aligned, inclusive from/
+exclusive to, retained for 180 UTC days including today. Daily ranges start at
+midnight UTC. Owner changes, deleted projects and auth errors use the existing
+project API policy. Invalid ranges return 400 `invalid_request`; unavailable or
+busy analytics return 503 `analytics_unavailable`, `Retry-After: 5`, with no-store.
+See [storage, bounds and exact browser/bearer contracts](STORAGE_POOL.md#approximate-page-view-analytics).

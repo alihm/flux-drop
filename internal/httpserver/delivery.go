@@ -45,6 +45,12 @@ func ProjectDeliveryWithFallback(repository projectResolver, dataRoot string, fa
 }
 
 func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fallback ProjectFallback, privateAccess PrivateAccess) http.Handler {
+	return ProjectDeliveryWithAnalytics(repository, dataRoot, fallback, privateAccess, nil)
+}
+
+// ProjectDeliveryWithAnalytics adds optional memory-only page counting after
+// authorization. Observer failures must be isolated in its background worker.
+func ProjectDeliveryWithAnalytics(repository projectResolver, dataRoot string, fallback ProjectFallback, privateAccess PrivateAccess, analytics ProjectAnalytics) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Security-Policy", "sandbox allow-scripts; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
@@ -117,6 +123,18 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 		if content.ValidatePath(file) != nil {
 			http.NotFound(w, r)
 			return
+		}
+		if analytics != nil && countPageView(r, file) {
+			viewAt := time.Now()
+			recorder := &pageViewWriter{ResponseWriter: w}
+			w = recorder
+			defer func() {
+				// Nginx completes internal redirects after Go returns. This records
+				// successful authorized handoffs, not proof of final client receipt.
+				if (recorder.status == 200 || recorder.status == 304) && r.Context().Err() == nil {
+					analytics.Record(p.ID, viewAt)
+				}
+			}()
 		}
 		branded := !p.WatermarkDisabled && htmlFile(file)
 		if branded {
