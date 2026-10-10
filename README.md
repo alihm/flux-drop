@@ -63,6 +63,10 @@ TLS. See [deployment settings, guarantees and added endpoints](docs/STORAGE_POOL
 
 Primary apps provide a [wallet-authenticated storage dashboard](docs/ADMIN.md) at `/admin/`, with app search, capacity, replica health, and safe drain/removal controls.
 
+The dashboard separates active files, retained versions, filesystem allowance and
+temporary reservations. See [manifest accounting and optional verified cleanup](docs/STORAGE_ACCOUNTING.txt)
+for the audited legacy upgrade and replica-aware reclamation requirements.
+
 ## Runtime
 
 Automatic deployment uses one private `DROP_CLUSTER_PASSPHRASE`, three replicas,

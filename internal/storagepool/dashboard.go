@@ -58,7 +58,7 @@ func (p *Pool) Dashboard(ctx context.Context) (any, error) {
 		}
 		return nil
 	})
-	return map[string]any{"apps": p.appStatuses(), "allocations": allocations, "controls": controls, "headroomBytes": Headroom}, err
+	return map[string]any{"apps": p.appStatuses(), "allocations": allocations, "controls": controls, "headroomBytes": Headroom, "reclamationEnabled": p.config.Reclamation}, err
 }
 
 // ChangeApp runs inside the admin authorization transaction. A removal and an
@@ -89,7 +89,7 @@ func (p *Pool) ChangeApp(tx *metadata.Tx, name, action string) error {
 	case "drain":
 		c.Drain = true
 	case "restore":
-		if allocation.BlockBytes < 0 {
+		if allocation.BlockBytes < 0 && allocation.BlockBytes != -2 {
 			if allocation.BlockBytes != -1 || c.ResumeBlockBytes < 0 || c.ResumeBlockBytes > 1<<20 {
 				return project.ErrStorage
 			}
@@ -105,10 +105,12 @@ func (p *Pool) ChangeApp(tx *metadata.Tx, name, action string) error {
 		// otherwise their older Gob schema could discard the control fields.
 		if allocation.BlockBytes >= 0 {
 			c.ResumeBlockBytes = allocation.BlockBytes
-		} else if allocation.BlockBytes != -1 {
+		} else if allocation.BlockBytes != -1 && allocation.BlockBytes != -2 {
 			return project.ErrStorage
 		}
-		allocation.BlockBytes = -1
+		if allocation.Schema < 1 {
+			allocation.BlockBytes = -1
+		}
 	}
 	allocation.Control = c
 	return tx.Set("storage_allocations/"+name, allocation)

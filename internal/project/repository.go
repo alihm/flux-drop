@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/runonflux/flux-drop/internal/content"
 	"github.com/runonflux/flux-drop/internal/session"
 )
 
@@ -87,6 +88,7 @@ func (a Actor) Owns(o Owner) bool {
 type Project struct {
 	ID                string     `firestore:"id" json:"id"`
 	StorageApp        string     `firestore:"storageApp" json:"-"`
+	StorageGeneration string     `firestore:"storageGeneration,omitempty" json:"-"`
 	Owner             Owner      `firestore:"owner" json:"owner"`
 	OwnerKey          string     `firestore:"ownerKey" json:"-"`
 	Slug              string     `firestore:"slug" json:"slug"`
@@ -116,19 +118,23 @@ func (p Project) Live(now time.Time) bool {
 type Reservation struct {
 	Key, ProjectID, Name, Digest string
 	Bytes, ExpectedRevision      int64
-	Files                        int `json:"-"`
+	Files                        int               `json:"-"`
+	StorageManifest              *content.Manifest `json:"-"`
+	StorageOperationID           string            `json:"-"`
 }
 type Operation struct {
-	ID           string    `firestore:"id"`
-	Fingerprint  string    `firestore:"fingerprint"`
-	Owner        Owner     `firestore:"owner"`
-	ProjectID    string    `firestore:"projectID"`
-	Digest       string    `firestore:"digest"`
-	Bytes        int64     `firestore:"bytes"`
-	BaseRevision int64     `firestore:"baseRevision"`
-	New          bool      `firestore:"new"`
-	State        string    `firestore:"state"`
-	ExpiresAt    time.Time `firestore:"expiresAt"`
+	ID                string    `firestore:"id"`
+	Fingerprint       string    `firestore:"fingerprint"`
+	Owner             Owner     `firestore:"owner"`
+	ProjectID         string    `firestore:"projectID"`
+	Digest            string    `firestore:"digest"`
+	Bytes             int64     `firestore:"bytes"`
+	BaseRevision      int64     `firestore:"baseRevision"`
+	New               bool      `firestore:"new"`
+	State             string    `firestore:"state"`
+	ExpiresAt         time.Time `firestore:"expiresAt"`
+	StorageGeneration string    `firestore:"storageGeneration,omitempty"`
+	StorageVersionKey string    `firestore:"storageVersionKey,omitempty"`
 }
 type Prepared struct {
 	Project   Project

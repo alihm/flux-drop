@@ -83,7 +83,7 @@ func TestBrowserLifecycleUsesRemoteStorageAndCurrentAccess(t *testing.T) {
 	if err != nil || authority.StorageApp != "storagea" {
 		t.Fatal(authority, err)
 	}
-	if _, err := content.VerifyVersion(secondary.version(pr.ID, pr.ActiveDigest), pr.ActiveDigest); err != nil {
+	if _, err := content.VerifyVersion(secondary.operationVersion(Operation{ProjectID: pr.ID, Digest: pr.ActiveDigest, Generation: authority.StorageGeneration}), pr.ActiveDigest); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "projects", pr.ID)); !os.IsNotExist(err) {

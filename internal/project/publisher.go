@@ -92,6 +92,7 @@ func (p *Publisher) install(ctx context.Context, actor Actor, request Reservatio
 		return Prepared{}, err
 	}
 	request.Files = len(manifest.Files)
+	request.StorageManifest = &manifest
 	request.Digest = staged.Digest
 	request.Bytes = 0
 	for _, file := range manifest.Files {

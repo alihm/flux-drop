@@ -1,0 +1,186 @@
+Secondary storage accounting and verified reclamation
+====================================================
+
+Dashboard meanings
+------------------
+Capacity counts a secondary app once, not once per replica.
+Active files: expanded bytes of the current active project versions.
+Retained versions: expanded bytes charged for superseded/incomplete versions.
+Filesystem allowance: rounded file blocks, directories, manifest and parent
+metadata, plus any conservative allowance from unaudited legacy versions.
+Temporary uploads: the largest current reservation report from a healthy
+secondary instance. These reservations expire/release; they are NOT permanent
+space reserved for a future update. Health reports can lag by about 15 seconds.
+Storage budget: retained content plus filesystem allowance, counted once per app.
+Available: the smaller of the unused app budget and actual filesystem available
+space, after current reservations and the existing 1 GiB safety headroom.
+
+These are admission budgets, not du measurements or guaranteed disk extents.
+Content sizes come from immutable manifests; filesystem allowances are estimates
+rounded to the largest observed replica block size. Shared ancestors are charged
+conservatively per version. Unfinished uploads can have reserved content that was
+never fully installed. Physical free-space/inode checks remain authoritative.
+
+New uploads no longer permanently charge 8 MiB plus twenty directory levels for
+EVERY file. Actual manifest paths determine persistent filesystem allowance.
+Worst-case spool/install reservations remain temporary upload-time checks.
+The separate owner quota still charges max(expanded bytes, 1 MiB) per distinct
+operation. That anti-churn floor is not displayed as actual storage usage.
+
+Automatic accounting upgrade
+----------------------------
+The primary runs reconciliation at startup and every minute. It temporarily
+fences legacy allocation writers with BlockBytes=-2, audits durable operation
+history against the exact old charge formula, then fetches verified manifests.
+Identical legacy digests in one project share one physical budget, while their
+distinct owner quota charges remain recorded. Existing files are not moved.
+
+Pending operations must finish or recover before the upgrade completes. Missing
+manifests keep their full original allowance; missing/incomplete history keeps
+the app fenced for investigation. Unknown bytes are never silently reset to zero.
+Large cohorts are read in bounded batches, with a live-content revision check.
+Concurrent reconciliation attempts are fenced by a durable migration identity.
+An interrupted backfill can restart safely. Startup waits for healthy storage
+reports, and manifests missing during a transient failure are retried from a
+separate bounded audit queue; inflated allowances are not frozen forever.
+Its per-version records are internal
+replicated metadata, not new browser APIs.
+
+Upgrade every primary instance together. Prior images intentionally reject the
+new negative block-size marker rather than overwrite the extended Gob schema.
+With reclamation disabled (the default), manifest accounting also works against
+older secondaries, using the existing digest-based storage paths. Reads and
+existing public/private endpoints retain their existing authorization behavior.
+
+Optional physical cleanup
+-------------------------
+No files are deleted by default. This is deliberate: ordinary Flux location
+discovery cannot prove which offline Syncthing devices still hold old files.
+
+Optional PRIMARY setting:
+  DROP_STORAGE_RECLAMATION_ENABLED=false
+
+Optional SECONDARY settings (all three are required only to opt into cleanup):
+  DROP_STORAGE_SYNCTHING_URL=http://127.0.0.1:8384
+  DROP_STORAGE_SYNCTHING_API_KEY=<local Syncthing GUI API key, at least 32 chars>
+  DROP_STORAGE_SYNCTHING_FOLDER=<actual folder ID for the /data volume>
+
+The URL has no default connection; leaving these unset disables the adapter.
+It must be an HTTP loopback IP URL without credentials, query or fragment. No
+new public port is required. The API must be accessible inside the secondary's
+network namespace and control the EXACT same mounted folder path. A host-side
+Flux Syncthing process with a different path/namespace does not satisfy this
+contract just because it replicates /data; do not guess its API credentials.
+
+The adapter currently supports the audited Syncthing v1.30.0 pause-and-wait
+contract only. Other versions fail closed, retaining content and allowances.
+It requires sendreceive mode, no folder versioning, no introducer devices, no
+ignored deletions, and no overlapping sync folders. The process must be able to
+persist .stignore on the volume. Do not downgrade a production service merely to
+enable this optional adapter; extend and test the adapter for its actual version.
+
+Before enabling the primary setting, upgrade ALL primary and secondary instances
+and verify the adapter against the actual Flux replication service. The setting
+switches new remote uploads to operation-stable physical generations:
+  projects/<project ID>/generations/<64-hex operation ID>
+It does not increase upload durability: one verified/fsynced secondary instance
+still acknowledges success, followed by asynchronous Syncthing replication.
+
+Cleanup scans per-app queues of pending/obsolete versions in bounded batches
+once per minute; active sites and permanent refund history do not fill the queue.
+The version starting cleanup must be at least one hour old; active versions,
+reserved projects, unfinalized expiry,
+any pending publication, unverified legacy content and unknown state are held.
+Expired reservations alone do not authorize deletion.
+
+Every Syncthing device configured in the folder, including offline devices, must
+map to a distinct reachable upgraded secondary. All must report the same complete
+membership epoch. Retirement irreversibly pins that epoch and the required device
+set. A later membership change cannot silently shrink it or release allowance.
+
+Each member first persists a non-expiring local retirement receipt. Publication
+checks the replicated retirement ledger; secondary reserve, install, commit and
+read paths check the local fence. Cleanup coordinates with local installers and
+direct streams, pauses Syncthing and waits for its runners to stop, prepends an
+exact permanent ignore for that physical version, verifies the ignore on the
+actual mounted volume, unlinks through rooted filesystem access and fsyncs the
+parent. It then resumes the folder if Drop paused it and acknowledges its device
+ID and epoch. A failed fence leaves replication paused and is retried; it never
+produces an acknowledgement or refund. A receipt survives a secondary restart.
+
+For an irreversibly tombstoned project, the fence and deletion cover its entire
+namespace, including shared marker/parent directories and any newer versions.
+This prevents the last version's refund leaving unaccounted per-project metadata.
+Every version still needs its own all-member refund acknowledgement. Unknown or
+younger charges remain held even if a deleted project's bytes are already gone.
+
+Only after EVERY required acknowledgement does one Raft transaction refund the
+version's storage bytes/inodes and all associated owner quota charges. Claiming
+may have moved those charges; the CURRENT owner receives the refund. Retries,
+concurrent workers and an unknown network outcome cannot refund twice. Shared
+project markers/parent directories remain conservatively covered by live versions.
+For live projects, shared markers remain covered by the active version. Primary
+Nginx cache entries are independent copies; deleting a canonical secondary
+generation cannot race with Nginx opening a primary cache file.
+
+Restoring identical content uses a new generation. Retired generation identities
+and legacy digest fences never expire. Do not remove retirement state or ignore
+patterns, restore old state snapshots, change folder membership, add a sync writer
+or reintroduce a decommissioned device while cleanup is enabled. Pause the cohort
+and reconcile its permanent fences before those operational changes. Automatic
+membership transition/decommission and backup-restore admission are not provided.
+
+Internal protocol additions
+---------------------------
+All routes below use the existing private storage TLS listener and require BOTH
+an app API key and a current primary source IP. They are never browser endpoints.
+Existing /internal/storage/v1 routes remain available.
+
+GET /internal/storage/v1/capacity and /status now advertise protocol: 2.
+PUT /internal/storage/v1/operations/{operationId} accepts an optional generation
+field (64 lower-case hex, equal to operationId); receipts repeat it. An omitted
+generation preserves legacy digest storage. The primary only sends this field
+when reclamation is enabled and selected writable instances advertise protocol 2.
+
+GET /internal/storage/v1/generations/{projectId}/{generation}/{digest}/manifest
+  Returns the canonical manifest JSON, like the existing versions route.
+GET or HEAD .../generations/{projectId}/{generation}/{digest}/files/{path...}
+  Same verified file response as the existing versions route.
+GET /internal/storage/v1/replication
+  {"device":"<Syncthing device ID>","epoch":"<64-hex membership hash>",
+   "members":["<all configured folder device IDs, sorted>"]}
+  Returns 503 when the adapter is unavailable; unsafe configuration returns 409.
+POST /internal/storage/v1/reclaim
+  Body: the internal replicated StorageVersion retirement record, including ID,
+  App, ProjectID, Digest, Generation, State="retiring", MembershipEpoch, Members,
+  and ProjectDeleted (true only after irreversible project tombstoning).
+  Success: {"id":"<version ID>","epoch":"<membership hash>","member":"<device>"}
+  A conflicting binding/epoch returns 409; any unproven cleanup returns 503.
+
+GET /admin/api/apps additionally returns reclamationEnabled (boolean).
+Its allocation entries retain allocatedBytes/allocatedInodes and add schema,
+accountingBlockBytes, contentBytes, liveBytes, versions, legacyBytes, legacyInodes.
+Private migration IDs and live-counter revision stamps are omitted from JSON.
+
+Verification
+------------
+  go test -race ./...
+  go vet ./...
+  go build ./cmd/...
+  bash scripts/test-storage-reclamation.sh
+  cd tests/browser && npx playwright test specs/admin.spec.js
+
+The Syncthing script extracts a digest-pinned v1.30.0 binary from its official
+Docker image and runs two disposable local processes. It checks real replication,
+offline refusal, return and cleanup, resumed scanning without resurrection, and
+active-generation survival. Unit tests cover legacy reconciliation, idempotency,
+unverified history, durable fences, all-member acknowledgements, epoch pinning,
+interrupted cleanup, owner transfer, filesystem block uplifts and rooted deletion.
+This does not certify arbitrary Flux host Syncthing configurations or versions.
+
+Protocol references / audited implementation:
+  https://docs.syncthing.net/rest/config.html
+  https://docs.syncthing.net/rest/db-ignores-post.html
+  https://docs.syncthing.net/users/ignoring.html
+  https://github.com/syncthing/syncthing/blob/v1.30.0/lib/api/confighandler.go
+  https://github.com/syncthing/syncthing/blob/v1.30.0/lib/model/model.go

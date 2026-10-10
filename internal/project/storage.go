@@ -19,14 +19,24 @@ type StorageOffer struct {
 	BlockBytes                   int64
 	LimitInodes, AvailableInodes uint64
 	TracksInodes                 bool
+	Generations                  bool
 }
 type StorageAllocation struct {
-	Control     StorageControl `json:"control"`
-	BlockBytes  int64          `json:"blockBytes"`
-	LimitBytes  int64          `json:"limitBytes"`
-	LimitInodes uint64         `json:"limitInodes"`
-	Bytes       int64          `json:"allocatedBytes"`
-	Inodes      uint64         `json:"allocatedInodes"`
+	Schema               int            `json:"schema"`
+	AccountingBlockBytes int64          `json:"accountingBlockBytes"`
+	ContentBytes         int64          `json:"contentBytes"`
+	LiveBytes            int64          `json:"liveBytes"`
+	Versions             int64          `json:"versions"`
+	LegacyBytes          int64          `json:"legacyBytes"`
+	LegacyInodes         uint64         `json:"legacyInodes"`
+	MigrationID          string         `json:"-"`
+	LiveEpoch            int64          `json:"-"`
+	Control              StorageControl `json:"control"`
+	BlockBytes           int64          `json:"blockBytes"`
+	LimitBytes           int64          `json:"limitBytes"`
+	LimitInodes          uint64         `json:"limitInodes"`
+	Bytes                int64          `json:"allocatedBytes"`
+	Inodes               uint64         `json:"allocatedInodes"`
 }
 
 // StorageControl is checked in the allocation transaction, so even an old offer
@@ -44,6 +54,9 @@ type ContentInstaller interface {
 func (s *RaftRepository) allocateStorage(tx *raftTx, p *Project, r Reservation, offers []StorageOffer) error {
 	if s.StorageOffers == nil {
 		return nil
+	}
+	if r.StorageManifest != nil {
+		return s.allocateMeasuredStorage(tx, p, r, offers)
 	}
 	for _, offer := range offers {
 		if p.StorageApp != "" && offer.App != p.StorageApp {

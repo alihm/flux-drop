@@ -21,6 +21,20 @@ test('admin shows logical capacity once and searches apps and replicas',async({p
  await page.getByRole('searchbox').fill('storageb');await expect(page.locator('#apps')).toContainText('Unknown');await expect(page.locator('#apps')).toContainText('Discovery stale');expect(errors).toEqual([]);
 });
 
+test('admin separates active content, retained versions, allowance and temporary reservations',async({page})=>{
+ await pageRoute(page);await page.route('**/admin/api/session',r=>r.fulfill({json:session}));
+ const data=fixture();data.allocations.storagea={schema:2,allocatedBytes:10*GiB,contentBytes:6*GiB,liveBytes:2*GiB};
+ for(const node of data.apps[0].nodes)node.capacity.reservedBytes=GiB;
+ await page.route('**/admin/api/apps',r=>r.fulfill({json:data}));await page.goto('/admin/');
+ const card=page.locator('#apps .app').first();
+ const value=label=>card.locator('.storage-grid > div').filter({has:page.getByText(label,{exact:true})}).locator('b');
+ await expect(value('Active files')).toHaveText('2 GiB');await expect(value('Retained versions')).toHaveText('4 GiB');
+ await expect(value('Filesystem allowance')).toHaveText('4 GiB');await expect(value('Temporary uploads')).toHaveText('1 GiB');
+ await expect(value('Storage budget')).toHaveText('10 GiB');await expect(page.locator('#metric-free')).toHaveText('88 GiB');
+ await expect(card).toContainText('Verified cleanup is disabled');
+ await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});
+
 test('admin projects are searchable with storage placement and owner details',async({page})=>{
  await pageRoute(page);await page.route('**/admin/api/session',r=>r.fulfill({json:session}));await page.route('**/admin/api/apps',r=>r.fulfill({json:fixture()}));
  await page.route('**/admin/api/projects?*',r=>{const q=new URL(r.request().url()).searchParams.get('q');return r.fulfill({json:{projects:q==='missing'?[]:[{id:'a'.repeat(32),slug:'demo-abcdef',ownerId:'account-demo',ownerKind:'firebase',storageApp:'storagea',bytes:1024,status:'active',private:true,revision:3,createdAt:'2026-10-08T00:00:00Z'}],nextCursor:''}})});

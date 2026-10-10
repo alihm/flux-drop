@@ -136,6 +136,9 @@ func (t *raftTx) Set(key string, value any) error {
 				return err
 			}
 		}
+		if err := updateStorageLive(t.tx, old, p); err != nil {
+			return err
+		}
 	}
 	return t.tx.Set(key, value)
 }

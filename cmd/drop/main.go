@@ -311,6 +311,12 @@ func run() error {
 	httpserver.StartDebugListener(ctx)
 	server := &http.Server{Addr: "127.0.0.1:8081", Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 330 * time.Second, WriteTimeout: 10 * time.Minute, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	defer server.Close()
+	if storage != nil {
+		accountingContext, cancelAccounting := context.WithCancel(ctx)
+		accountingDone := make(chan struct{})
+		go func() { defer close(accountingDone); storage.RunAccounting(accountingContext) }()
+		defer func() { cancelAccounting(); <-accountingDone }()
+	}
 	if maintenance != nil {
 		workerContext, cancelWorker := context.WithCancel(ctx)
 		workerDone := make(chan struct{})

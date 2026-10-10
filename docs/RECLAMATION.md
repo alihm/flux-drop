@@ -1,5 +1,14 @@
 # Replica-aware reclamation: audit first
 
+**Remote Raft storage update:** [STORAGE_ACCOUNTING.txt](STORAGE_ACCOUNTING.txt)
+documents the implemented manifest accounting, audited legacy backfill and optional
+replica-acknowledged generation cleanup. Cleanup remains disabled by default and
+requires the explicitly supported local Syncthing adapter on every device. The
+digest-only limitations and disabled workers below describe the original local /
+Firestore path; those guarantees and APIs remain unchanged. Remote Raft publication
+uses generations when the reclamation setting is enabled. It must not be enabled
+until all primaries and secondaries are upgraded and replication prerequisites hold.
+
 ## Implemented
 
 `FirestoreRepository.AuditRetention` accepts 1–100 explicit project/version IDs

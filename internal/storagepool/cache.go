@@ -222,6 +222,14 @@ func (p *Pool) serve(w http.ResponseWriter, r *http.Request, pr project.Project,
 			continue
 		}
 		prefix := apiPrefix + "versions/" + pr.ID + "/" + pr.ActiveDigest
+		if pr.StorageGeneration != "" {
+			if !digestRE.MatchString(pr.StorageGeneration) {
+				w.Header().Set("Retry-After", "5")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			prefix = apiPrefix + "generations/" + pr.ID + "/" + pr.StorageGeneration + "/" + pr.ActiveDigest
+		}
 		res, err := a.request(ctx, addr, "GET", prefix+"/manifest", nil, "")
 		if err != nil {
 			continue

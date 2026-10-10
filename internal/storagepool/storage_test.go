@@ -328,6 +328,12 @@ func TestCacheRespectsCurrentPolicyDeletionAndCorruption(t *testing.T) {
 		if err := os.WriteFile(entry.path, []byte("corrupted bytes"), 0600); err != nil {
 			t.Fatal(err)
 		}
+		// Invalidation uses size/mtime; explicitly change mtime on filesystems
+		// whose timestamp resolution can coalesce consecutive same-size writes.
+		changed := time.Now().Add(time.Second)
+		if err := os.Chtimes(entry.path, changed, changed); err != nil {
+			t.Fatal(err)
+		}
 	}
 	p.cache.mu.Unlock()
 	if rec := call(true); rec.Code != 503 {

@@ -37,6 +37,7 @@ var errConflict = errors.New("storage operation conflict")
 var errMissing = errors.New("storage operation missing")
 
 type Capacity struct {
+	Protocol       int    `json:"protocol,omitempty"`
 	InstanceID     string `json:"instanceId"`
 	Writable       bool   `json:"writable"`
 	AppName        string `json:"appName"`
@@ -51,20 +52,21 @@ type Capacity struct {
 	HeadroomBytes  int64  `json:"headroomBytes"`
 }
 type Operation struct {
-	ProjectID string    `json:"projectId"`
-	Digest    string    `json:"digest"`
-	Slug      string    `json:"slug"`
-	Bytes     int64     `json:"bytes"`
-	Files     int       `json:"files"`
-	ExpiresAt time.Time `json:"expiresAt"`
-	State     string    `json:"state,omitempty"`
+	Generation string    `json:"generation,omitempty"`
+	ProjectID  string    `json:"projectId"`
+	Digest     string    `json:"digest"`
+	Slug       string    `json:"slug"`
+	Bytes      int64     `json:"bytes"`
+	Files      int       `json:"files"`
+	ExpiresAt  time.Time `json:"expiresAt"`
+	State      string    `json:"state,omitempty"`
 }
 
 func (o Operation) valid() bool {
-	return idRE.MatchString(o.ProjectID) && digestRE.MatchString(o.Digest) && o.Bytes >= 0 && o.Bytes <= 200<<20 && o.Files > 0 && o.Files <= 5000 && projectSlugRE.MatchString(o.Slug) && o.State == "" && time.Until(o.ExpiresAt) > 0 && time.Until(o.ExpiresAt) <= 16*time.Minute
+	return (o.Generation == "" || digestRE.MatchString(o.Generation)) && idRE.MatchString(o.ProjectID) && digestRE.MatchString(o.Digest) && o.Bytes >= 0 && o.Bytes <= 200<<20 && o.Files > 0 && o.Files <= 5000 && projectSlugRE.MatchString(o.Slug) && o.State == "" && time.Until(o.ExpiresAt) > 0 && time.Until(o.ExpiresAt) <= 16*time.Minute
 }
 func (o Operation) same(other Operation) bool {
-	return o.ProjectID == other.ProjectID && o.Digest == other.Digest && o.Slug == other.Slug && o.Bytes == other.Bytes && o.Files == other.Files
+	return o.Generation == other.Generation && o.ProjectID == other.ProjectID && o.Digest == other.Digest && o.Slug == other.Slug && o.Bytes == other.Bytes && o.Files == other.Files
 }
 
 // Secondary receipts and in-flight reservations are node-local. Only immutable
@@ -75,6 +77,9 @@ type Secondary struct {
 	db            *bbolt.DB
 	primary       peerDiscovery
 	mu            sync.Mutex
+	reclamationMu sync.Mutex
+	projectLocks  [256]sync.RWMutex
+	versionLocks  [256]sync.RWMutex
 	busy          map[string]bool
 	slots         chan struct{}
 	stagingDisk   *httpserver.StorageAdmission
@@ -141,7 +146,13 @@ func NewSecondary(c Config, root, state string) (*Secondary, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := db.Update(func(tx *bbolt.Tx) error { _, err := tx.CreateBucketIfNotExists(opBucket); return err }); err != nil {
+	if err := db.Update(func(tx *bbolt.Tx) error {
+		if _, err := tx.CreateBucketIfNotExists(opBucket); err != nil {
+			return err
+		}
+		_, err := tx.CreateBucketIfNotExists(retirementBucket)
+		return err
+	}); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -256,7 +267,7 @@ func (s *Secondary) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+apiPrefix+"status", func(w http.ResponseWriter, r *http.Request) {
 		_, fresh := s.primary.Snapshot()
-		jsonReply(w, 200, map[string]any{"appName": s.config.AppName, "instanceId": s.instance, "protocol": 1, "discoveryFresh": fresh, "durability": "local-fsync"})
+		jsonReply(w, 200, map[string]any{"appName": s.config.AppName, "instanceId": s.instance, "protocol": 2, "discoveryFresh": fresh, "durability": "local-fsync"})
 	})
 	mux.HandleFunc("GET "+apiPrefix+"capacity", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
@@ -269,6 +280,20 @@ func (s *Secondary) Handler() http.Handler {
 		jsonReply(w, 200, c)
 	})
 	mux.HandleFunc("GET "+apiPrefix+"inventory", s.inventory)
+	mux.HandleFunc("GET "+apiPrefix+"replication", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		snapshot, _, err := s.replication(r.Context())
+		if err != nil {
+			storageError(w, err)
+			return
+		}
+		jsonReply(w, 200, snapshot)
+	})
+	mux.HandleFunc("POST "+apiPrefix+"reclaim", s.reclaim)
+	mux.HandleFunc("GET "+apiPrefix+"generations/{projectId}/{generation}/{digest}/manifest", s.manifest)
+	mux.HandleFunc("GET "+apiPrefix+"generations/{projectId}/{generation}/{digest}/files/{path...}", s.file)
+	mux.HandleFunc("HEAD "+apiPrefix+"generations/{projectId}/{generation}/{digest}/files/{path...}", s.file)
 	mux.HandleFunc("PUT "+apiPrefix+"operations/{operationId}", s.reserve)
 	mux.HandleFunc("GET "+apiPrefix+"operations/{operationId}", s.operation)
 	mux.HandleFunc("DELETE "+apiPrefix+"operations/{operationId}", s.cancel)
@@ -320,7 +345,7 @@ func (s *Secondary) capacity() (Capacity, error) {
 	if fs.Bsize <= 0 || fs.Bsize > 1<<20 || fs.Bavail > uint64((1<<63-1)/fs.Bsize) {
 		return Capacity{}, errFull
 	}
-	c := Capacity{InstanceID: s.instance, Writable: writableStorage, AppName: s.config.AppName, CapacityBytes: s.config.Capacity, AvailableBytes: int64(fs.Bavail) * fs.Bsize, FreeInodes: fs.Ffree, TotalInodes: fs.Files, BlockBytes: fs.Bsize, TracksInodes: fs.Files != 0, HeadroomBytes: Headroom}
+	c := Capacity{Protocol: 2, InstanceID: s.instance, Writable: writableStorage, AppName: s.config.AppName, CapacityBytes: s.config.Capacity, AvailableBytes: int64(fs.Bavail) * fs.Bsize, FreeInodes: fs.Ffree, TotalInodes: fs.Files, BlockBytes: fs.Bsize, TracksInodes: fs.Files != 0, HeadroomBytes: Headroom}
 	err := s.db.Update(func(tx *bbolt.Tx) error {
 		cursor := tx.Bucket(opBucket).Cursor()
 		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
@@ -354,12 +379,16 @@ func (s *Secondary) reserve(w http.ResponseWriter, r *http.Request) {
 	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
 	d.DisallowUnknownFields()
 	var extra any
-	if d.Decode(&o) != nil || d.Decode(&extra) != io.EOF || !o.valid() {
+	if d.Decode(&o) != nil || d.Decode(&extra) != io.EOF || !o.valid() || o.Generation != "" && o.Generation != id {
 		storageError(w, content.ErrInvalid)
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.notRetired(o); err != nil {
+		storageError(w, err)
+		return
+	}
 	c, err := s.capacity()
 	if err != nil {
 		storageError(w, err)
@@ -372,7 +401,7 @@ func (s *Secondary) reserve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if old.State == "stored" {
-			if err := content.SyncVersion(s.version(old.ProjectID, old.Digest), old.Digest); err != nil {
+			if err := content.SyncVersion(s.operationVersion(old), old.Digest); err != nil {
 				storageError(w, err)
 				return
 			}
@@ -421,8 +450,12 @@ func (s *Secondary) operation(w http.ResponseWriter, r *http.Request) {
 		storageError(w, errMissing)
 		return
 	}
+	if err = s.notRetired(o); err != nil {
+		storageError(w, err)
+		return
+	}
 	if o.State == "stored" {
-		if _, err = content.VerifyVersion(s.version(o.ProjectID, o.Digest), o.Digest); err != nil {
+		if _, err = content.VerifyVersion(s.operationVersion(o), o.Digest); err != nil {
 			o.State = "missing"
 		}
 	}
@@ -456,11 +489,11 @@ func (s *Secondary) commit(w http.ResponseWriter, r *http.Request) {
 		storageError(w, err)
 		return
 	}
-	if o.State != "stored" || !time.Now().Before(o.ExpiresAt) {
+	if s.notRetired(o) != nil || o.State != "stored" || !time.Now().Before(o.ExpiresAt) {
 		storageError(w, errConflict)
 		return
 	}
-	if err = content.SyncVersion(s.version(o.ProjectID, o.Digest), o.Digest); err != nil {
+	if err = content.SyncVersion(s.operationVersion(o), o.Digest); err != nil {
 		storageError(w, err)
 		return
 	}
@@ -483,6 +516,9 @@ func (s *Secondary) upload(w http.ResponseWriter, r *http.Request) {
 	o, err := s.read(id)
 	if err == nil && (o.State != "reserved" && o.State != "stored" || s.busy[id] || !time.Now().Before(o.ExpiresAt)) {
 		err = errConflict
+	}
+	if err == nil {
+		err = s.notRetired(o)
 	}
 	if err == nil {
 		s.busy[id] = true
@@ -532,11 +568,16 @@ func (s *Secondary) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !time.Now().Before(o.ExpiresAt) {
+	if !time.Now().Before(o.ExpiresAt) || s.notRetired(o) != nil {
 		storageError(w, errConflict)
 		return
 	}
-	if err = staged.Install(s.root, o.ProjectID, o.Slug); err != nil {
+	if o.Generation != "" {
+		err = staged.InstallGeneration(s.root, o.ProjectID, o.Slug, o.Generation)
+	} else {
+		err = staged.Install(s.root, o.ProjectID, o.Slug)
+	}
+	if err != nil {
 		storageError(w, err)
 		return
 	}
@@ -547,6 +588,13 @@ func (s *Secondary) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonReply(w, 200, o)
 }
+func (s *Secondary) operationVersion(o Operation) string {
+	if o.Generation == "" {
+		return s.version(o.ProjectID, o.Digest)
+	}
+	relative, _ := content.GenerationPath(o.ProjectID, o.Generation)
+	return filepath.Join(s.root, relative)
+}
 func (s *Secondary) version(id, digest string) string {
 	return filepath.Join(s.root, "projects", id, "versions", digest)
 }
@@ -556,10 +604,22 @@ func (s *Secondary) verified(r *http.Request) (content.Manifest, string, error) 
 		return content.Manifest{}, "", content.ErrInvalid
 	}
 	dir := s.version(id, digest)
+	if generation := r.PathValue("generation"); generation != "" {
+		if !digestRE.MatchString(generation) {
+			return content.Manifest{}, "", content.ErrInvalid
+		}
+		relative, _ := content.GenerationPath(id, generation)
+		dir = filepath.Join(s.root, relative)
+	}
+	if err := s.notRetired(Operation{ProjectID: id, Digest: digest, Generation: r.PathValue("generation")}); err != nil {
+		return content.Manifest{}, "", err
+	}
 	m, err := content.ServingVersions.VerifyContext(r.Context(), dir, digest, r.PathValue("path"))
 	return m, dir, err
 }
 func (s *Secondary) manifest(w http.ResponseWriter, r *http.Request) {
+	unlock := s.lockVersionRead(r.PathValue("projectId"), r.PathValue("digest"), r.PathValue("generation"))
+	defer unlock()
 	m, _, err := s.verified(r)
 	if err != nil {
 		storageError(w, err)
@@ -568,6 +628,8 @@ func (s *Secondary) manifest(w http.ResponseWriter, r *http.Request) {
 	jsonReply(w, 200, m)
 }
 func (s *Secondary) file(w http.ResponseWriter, r *http.Request) {
+	unlock := s.lockVersionRead(r.PathValue("projectId"), r.PathValue("digest"), r.PathValue("generation"))
+	defer unlock()
 	m, dir, err := s.verified(r)
 	if err != nil {
 		storageError(w, err)

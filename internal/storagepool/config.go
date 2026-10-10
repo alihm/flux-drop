@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/netip"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,6 +19,7 @@ const Headroom = int64(1 << 30)
 const MaxBody = int64(216 << 20)
 
 var appRE = regexp.MustCompile(`^[A-Za-z0-9]{1,64}$`)
+var syncFolderRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 var keyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 var idRE = regexp.MustCompile(`^[a-f0-9]{32}$`)
 var digestRE = regexp.MustCompile(`^[a-f0-9]{64}$`)
@@ -30,12 +33,14 @@ type App struct {
 	Drain   bool   `json:"drain,omitempty"`
 }
 type Config struct {
-	Role, AppName, PrimaryApp string
-	Apps                      []App
-	Keys                      map[string]string
-	Port                      uint16
-	Capacity, CacheBytes      int64
-	AdminKey                  string
+	Role, AppName, PrimaryApp                      string
+	Apps                                           []App
+	Keys                                           map[string]string
+	Port                                           uint16
+	Capacity, CacheBytes                           int64
+	AdminKey                                       string
+	Reclamation                                    bool
+	SyncthingURL, SyncthingAPIKey, SyncthingFolder string
 }
 
 func decode(raw string, value any) error {
@@ -55,8 +60,26 @@ func decode(raw string, value any) error {
 }
 func FromEnv(get func(string) string) (Config, error) {
 	c := Config{Role: get("DROP_ROLE"), AppName: get("FLUX_APP_NAME"), Port: DefaultPort, CacheBytes: 256 << 20, AdminKey: get("DROP_STORAGE_ADMIN_KEY")}
+	if raw := get("DROP_STORAGE_RECLAMATION_ENABLED"); raw != "" {
+		v, err := strconv.ParseBool(raw)
+		if err != nil {
+			return c, errors.New("invalid DROP_STORAGE_RECLAMATION_ENABLED")
+		}
+		c.Reclamation = v
+	}
+	c.SyncthingURL, c.SyncthingAPIKey, c.SyncthingFolder = get("DROP_STORAGE_SYNCTHING_URL"), get("DROP_STORAGE_SYNCTHING_API_KEY"), get("DROP_STORAGE_SYNCTHING_FOLDER")
+	if c.SyncthingURL != "" || c.SyncthingAPIKey != "" || c.SyncthingFolder != "" {
+		u, err := url.Parse(c.SyncthingURL)
+		if err != nil || u.Scheme != "http" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" && u.Path != "/" || !validSecret(c.SyncthingAPIKey) || !syncFolderRE.MatchString(c.SyncthingFolder) {
+			return c, errors.New("Syncthing cleanup requires a loopback HTTP URL, API key and folder ID")
+		}
+		ip, err := netip.ParseAddr(u.Hostname())
+		if err != nil || !ip.IsLoopback() {
+			return c, errors.New("Syncthing API must use a loopback IP")
+		}
+	}
 	if c.Role == "" {
-		for _, k := range []string{"DROP_STORAGE_APPS_JSON", "DROP_PRIMARY_APP_NAME", "DROP_STORAGE_API_KEYS_JSON", "DROP_STORAGE_CAPACITY_BYTES", "DROP_STORAGE_ADMIN_KEY", "DROP_CACHE_BYTES", "DROP_STORAGE_PORT"} {
+		for _, k := range []string{"DROP_STORAGE_APPS_JSON", "DROP_PRIMARY_APP_NAME", "DROP_STORAGE_API_KEYS_JSON", "DROP_STORAGE_CAPACITY_BYTES", "DROP_STORAGE_ADMIN_KEY", "DROP_CACHE_BYTES", "DROP_STORAGE_PORT", "DROP_STORAGE_RECLAMATION_ENABLED", "DROP_STORAGE_SYNCTHING_URL", "DROP_STORAGE_SYNCTHING_API_KEY", "DROP_STORAGE_SYNCTHING_FOLDER"} {
 			if get(k) != "" {
 				return c, errors.New("storage settings require DROP_ROLE")
 			}
@@ -86,6 +109,9 @@ func FromEnv(get func(string) string) (Config, error) {
 		c.Port = uint16(n)
 	}
 	if c.Role == "primary" {
+		if c.SyncthingURL != "" {
+			return c, errors.New("Syncthing settings require secondary role")
+		}
 		if get("DROP_PRIMARY_APP_NAME") != "" || get("DROP_STORAGE_API_KEYS_JSON") != "" || c.Capacity != 0 {
 			return c, errors.New("secondary settings supplied to primary")
 		}
@@ -112,6 +138,9 @@ func FromEnv(get func(string) string) (Config, error) {
 	} else {
 		if get("DROP_STORAGE_APPS_JSON") != "" || c.AdminKey != "" || get("DROP_CACHE_BYTES") != "" {
 			return c, errors.New("primary settings supplied to secondary")
+		}
+		if c.Reclamation {
+			return c, errors.New("reclamation scheduling requires primary role")
 		}
 		c.PrimaryApp = get("DROP_PRIMARY_APP_NAME")
 		if !appRE.MatchString(c.PrimaryApp) || strings.EqualFold(c.PrimaryApp, c.AppName) || c.Capacity <= Headroom {

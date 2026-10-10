@@ -201,9 +201,12 @@ func (p *Pool) Offers() []project.StorageOffer {
 		}
 		// A single healthy instance may acknowledge uploads. App-wide retained
 		// accounting reserves room for replication even while other nodes are down.
-		offer := project.StorageOffer{App: a.config.AppName, LimitBytes: 1 << 40, AvailableBytes: 1 << 62, BlockBytes: 1, LimitInodes: ^uint64(0), AvailableInodes: ^uint64(0)}
+		offer := project.StorageOffer{Generations: p.config.Reclamation, App: a.config.AppName, LimitBytes: 1 << 40, AvailableBytes: 1 << 62, BlockBytes: 1, LimitInodes: ^uint64(0), AvailableInodes: ^uint64(0)}
 		for _, n := range nodes {
 			c := n.Capacity
+			if c.Protocol < 2 {
+				offer.Generations = false
+			}
 			if c.CapacityBytes-Headroom < offer.LimitBytes {
 				offer.LimitBytes = c.CapacityBytes - Headroom
 			}
@@ -292,14 +295,14 @@ func (p *Pool) Install(ctx context.Context, prepared project.Prepared, staged *c
 	if a == nil {
 		return project.ErrStorage
 	}
-	op := Operation{ProjectID: prepared.Project.ID, Digest: staged.Digest, Slug: prepared.Project.InitialSlug, Bytes: prepared.Operation.Bytes, Files: len(staged.Manifest.Files), ExpiresAt: prepared.Operation.ExpiresAt}
+	op := Operation{Generation: prepared.Operation.StorageGeneration, ProjectID: prepared.Project.ID, Digest: staged.Digest, Slug: prepared.Project.InitialSlug, Bytes: prepared.Operation.Bytes, Files: len(staged.Manifest.Files), ExpiresAt: prepared.Operation.ExpiresAt}
 	if op.Slug == "" {
 		op.Slug = prepared.Project.Slug
 	}
 	raw, _ := json.Marshal(op)
 	var last error = project.ErrStorage
 	for _, node := range a.nodes() {
-		if !node.Capacity.Writable {
+		if !node.Capacity.Writable || op.Generation != "" && node.Capacity.Protocol < 2 {
 			continue
 		}
 		if err := ctx.Err(); err != nil {

@@ -12,6 +12,13 @@ The **Projects** tab lists records across all users, including owner IDs, storag
 
 The dashboard searches configured secondary app names and instance addresses. It shows replica health, conservative logical capacity, retained accounting, and available capacity. A replicated app contributes capacity once. Offline or stale instances do not contribute current capacity estimates. Availability respects allocation limits, filesystem reserves, and one GiB headroom. Upload admission separately checks temporary space for both incoming and installed content; the displayed available capacity is not divided by two. It is an estimate; upload-time capacity and inode checks remain authoritative.
 
+Storage cards now separate active files, retained versions, filesystem allowance,
+temporary upload reservations and the total storage budget. Temporary scratch
+space is not a permanent allowance for future updates. Existing allocations are
+audited before lowering their old worst-case budgets; unverified history stays
+reserved. Optional verified cleanup requires every Syncthing member to acknowledge
+deletion before refunds. See [accounting, settings and rollout](STORAGE_ACCOUNTING.txt).
+
 **Drain** stops all new uploads and version updates on the app while preserving serving. **Remove** excludes an empty app from placement and pool totals. Removal is refused if either retained bytes or retained inodes are nonzero, including abandoned uploads and deleted projects awaiting verified cleanup. Removal never retires the Flux deployment or deletes volumes. **Restore** reenables an app still present in `DROP_STORAGE_APPS_JSON`; a static `drain: true` environment setting still takes precedence. Controls persist across primary restarts and apply across all replicas. Allocation and removal check the same metadata records atomically, so stale placement offers cannot bypass a removal.
 
 Removing a configured app from `DROP_STORAGE_APPS_JSON` bypasses dashboard safeguards; keep entries for any apps holding projects. The dashboard deliberately does not edit Flux deployments or hold wallet spending credentials.

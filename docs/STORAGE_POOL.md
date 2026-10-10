@@ -170,15 +170,19 @@ one healthy writable instance allows an upload; replication lag/failures must
 still be monitored through Flux/Syncthing. Drop does not claim to measure the
 Syncthing backlog or prove replica completeness from capacity alone.
 
-A primary metadata transaction conservatively charges the selected app for each
-new operation: expanded bytes, 8 MiB manifest/installation allowance, and
-`(fileCount * 21 + 64) * filesystemBlockSize` directory/block overhead. It also
-tracks retained inode reservations. These charges persist across primary
+A primary metadata transaction charges the selected app from the verified
+manifest: rounded file blocks, actual directory entries, manifest and small parent
+metadata allowance. Upload scratch reservations remain temporary. Legacy charges
+(expanded bytes plus 8 MiB and worst-case directory/block overhead) are audited
+against operation history before being reduced; unverified usage remains reserved.
+It also tracks retained inode reservations. These charges persist across primary
 failover and prevent competing primary instances from allocating the same
 logical capacity independently. Budgets are per-app, never multiplied by the
 number of replicas. Lower observed budget limits cannot later be increased
 implicitly by a different instance's report. A larger filesystem block size
 raises the retained overhead estimate for prior allocations too. Owner quotas remain separate.
+See [storage accounting and optional replica-verified cleanup](STORAGE_ACCOUNTING.txt)
+for dashboard meanings, the backward-writer fence, generation protocol and rollout.
 
 Observed physical free space and local reservations add another admission gate.
 External filesystem consumers and Syncthing can change space after probing;

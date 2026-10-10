@@ -92,6 +92,7 @@ func (s *RaftRepository) Reserve(ctx context.Context, a Actor, r Reservation) (P
 		offers = s.StorageOffers()
 	}
 	opID := operationID(a, r.Key)
+	r.StorageOperationID = opID
 	var result Prepared
 	err := s.runContent(ctx, func(ctx context.Context, tx *raftTx) error {
 		if err := s.authorizePublish(tx, a); err != nil {
@@ -121,7 +122,7 @@ func (s *RaftRepository) Reserve(ctx context.Context, a Actor, r Reservation) (P
 			if op.State != "complete" && !s.now().Before(op.ExpiresAt) {
 				return ErrConflict
 			}
-			if err := s.checkNotRetired(tx, VersionRef{p.ID, op.Digest}); err != nil {
+			if err := s.checkStorageOperation(tx, p, op); err != nil {
 				return err
 			}
 			result = Prepared{p, op}
@@ -176,8 +177,10 @@ func (s *RaftRepository) Reserve(ctx context.Context, a Actor, r Reservation) (P
 				return ErrConflict
 			}
 		}
-		if err := s.checkNotRetired(tx, VersionRef{p.ID, r.Digest}); err != nil {
-			return err
+		if s.StorageOffers == nil || r.StorageManifest == nil {
+			if err := s.checkNotRetired(tx, VersionRef{p.ID, r.Digest}); err != nil {
+				return err
+			}
 		}
 		idx, err := raftRead[digestRecord](tx, s.raftRef("digests", r.Digest))
 		if err == nil && idx.ProjectID != p.ID {
@@ -217,6 +220,16 @@ func (s *RaftRepository) Reserve(ctx context.Context, a Actor, r Reservation) (P
 		q.ChargedBytes += charge
 		p.ChargedBytes += charge
 		op = Operation{ID: opID, Owner: a.Owner(), Fingerprint: hash(r), ProjectID: p.ID, Digest: r.Digest, Bytes: r.Bytes, BaseRevision: p.Revision, New: isNew, State: "pending", ExpiresAt: now.Add(15 * time.Minute)}
+		if s.StorageOffers != nil && r.StorageManifest != nil {
+			charge, err := raftRead[StorageOperationCharge](tx, "storage_operation_charges/"+opID)
+			if err != nil {
+				return err
+			}
+			op.StorageGeneration, op.StorageVersionKey = charge.Generation, charge.VersionKey
+		}
+		if err := s.checkStorageOperation(tx, p, op); err != nil {
+			return err
+		}
 		p.PendingOperation = opID
 		if isNew {
 			q.Count++
@@ -282,7 +295,7 @@ func (s *RaftRepository) activate(ctx context.Context, a Actor, opID, passwordDi
 		if !a.Owns(p.Owner) || p.Status == "deleted" || (p.ExpiresAt != nil && !s.now().Before(*p.ExpiresAt)) {
 			return ErrNotFound
 		}
-		if err := s.checkNotRetired(tx, VersionRef{p.ID, op.Digest}); err != nil {
+		if err := s.checkStorageOperation(tx, p, op); err != nil {
 			return err
 		}
 		if op.State == "complete" {
@@ -319,6 +332,7 @@ func (s *RaftRepository) activate(ctx context.Context, a Actor, opID, passwordDi
 			}
 		}
 		p.ActiveDigest, p.ActiveBytes, p.Status, p.PendingOperation = op.Digest, op.Bytes, "active", ""
+		p.StorageGeneration = op.StorageGeneration
 		if passwordDigest != "" {
 			p.Private, p.PasswordDigest, p.PasswordRevision = true, passwordDigest, passwordRevision
 			p.PolicyRevision++

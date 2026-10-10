@@ -103,6 +103,21 @@ func (s *Store) RunContent(ctx context.Context, fn func(*Tx) error) error {
 // overwrites the protected write. There is deliberately no downgrade method.
 func (t *Tx) RequireReplication() { t.durability = kv.Replicated }
 
+// ValidateReads distinguishes a confirmed invariant failure from read skew on
+// legacy backends that cannot supply an immutable transaction snapshot. A CAS
+// conflict retries the entire transaction. It neither commits pending writes nor
+// replaces any read; successful writes still require the final atomic CAS.
+func (t *Tx) ValidateReads() error {
+	checks := make([]kv.Check, 0, len(t.reads))
+	for key, record := range t.reads {
+		checks = append(checks, kv.Check{Key: key, Version: record.Version})
+	}
+	if len(checks) == 0 {
+		return kv.ErrInvalid
+	}
+	return t.backend.Check(t.ctx, checks)
+}
+
 func (s *Store) run(ctx context.Context, durability kv.Durability, fn func(*Tx) error) error {
 	if s == nil || s.Backend == nil {
 		return kv.ErrInvalid

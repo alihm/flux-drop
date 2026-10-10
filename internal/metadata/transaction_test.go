@@ -68,6 +68,36 @@ func TestPrefetchedAuthorizationStillChecksConcurrentRevocation(t *testing.T) {
 	}
 }
 
+func TestValidateReadsRetriesSkewBeforeReportingInvariantFailure(t *testing.T) {
+	ctx := context.Background()
+	store := &Store{Backend: &testmetadata.Backend{}}
+	if err := store.Run(ctx, func(tx *Tx) error { return tx.Set("tests/invariant", 1) }); err != nil {
+		t.Fatal(err)
+	}
+	attempts := 0
+	if err := store.Run(ctx, func(tx *Tx) error {
+		attempts++
+		var value int
+		if err := tx.Get("tests/invariant", &value); err != nil {
+			return err
+		}
+		if attempts == 1 {
+			if err := store.Run(ctx, func(other *Tx) error { return other.Set("tests/invariant", 2) }); err != nil {
+				return err
+			}
+		}
+		if err := tx.ValidateReads(); err != nil {
+			return err
+		}
+		if value != 2 {
+			t.Fatal("stale value passed validation", value)
+		}
+		return nil
+	}); err != nil || attempts != 2 {
+		t.Fatal(err, attempts)
+	}
+}
+
 type failAfterCommit struct {
 	*testmetadata.Backend
 	calls int
