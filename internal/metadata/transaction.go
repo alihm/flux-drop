@@ -30,6 +30,7 @@ type Tx struct {
 	reads      map[string]kv.Record
 	writes     map[string]kv.Write
 	durability kv.Durability
+	snapshot   bool
 }
 
 // Encoding is independent of public JSON tags: project ownership/password fields
@@ -88,7 +89,7 @@ func Decode(data []byte, value any) error {
 }
 
 func (s *Store) Run(ctx context.Context, fn func(*Tx) error) error {
-	return s.run(ctx, kv.Replicated, fn)
+	return s.run(ctx, kv.Replicated, false, fn)
 }
 
 // RunContent permits local-durable acknowledgement only for reviewed content
@@ -96,7 +97,7 @@ func (s *Store) Run(ctx context.Context, fn func(*Tx) error) error {
 // collections and RequireReplication promote the WHOLE transaction to replicated.
 // Typed repositories must additionally inspect policy changes inside projects.
 func (s *Store) RunContent(ctx context.Context, fn func(*Tx) error) error {
-	return s.run(ctx, kv.Local, fn)
+	return s.run(ctx, kv.Local, false, fn)
 }
 
 // RequireReplication is sticky for this attempt, including if a later Set
@@ -118,7 +119,7 @@ func (t *Tx) ValidateReads() error {
 	return t.backend.Check(t.ctx, checks)
 }
 
-func (s *Store) run(ctx context.Context, durability kv.Durability, fn func(*Tx) error) error {
+func (s *Store) run(ctx context.Context, durability kv.Durability, snapshot bool, fn func(*Tx) error) error {
 	if s == nil || s.Backend == nil {
 		return kv.ErrInvalid
 	}
@@ -129,7 +130,7 @@ func (s *Store) run(ctx context.Context, durability kv.Durability, fn func(*Tx) 
 		if factory, ok := backend.(interface{ TransactionBackend() Backend }); ok {
 			backend = factory.TransactionBackend()
 		}
-		tx := &Tx{ctx: ctx, backend: backend, reads: make(map[string]kv.Record), writes: make(map[string]kv.Write), durability: durability}
+		tx := &Tx{ctx: ctx, backend: backend, reads: make(map[string]kv.Record), writes: make(map[string]kv.Write), durability: durability, snapshot: snapshot}
 		err := fn(tx)
 		if err == nil {
 			err = tx.finish()
@@ -189,6 +190,9 @@ func (t *Tx) Get(key string, into any) error {
 }
 
 func (t *Tx) Set(key string, value any) error {
+	if t.snapshot {
+		return kv.ErrInvalid
+	}
 	t.classifyWrite(key, false)
 	if _, err := t.record(key); err != nil {
 		return err
@@ -211,6 +215,9 @@ func (t *Tx) Create(key string, value any) error {
 	return t.Set(key, value)
 }
 func (t *Tx) Delete(key string) error {
+	if t.snapshot {
+		return kv.ErrInvalid
+	}
 	t.classifyWrite(key, true)
 	if _, err := t.record(key); err != nil {
 		return err
@@ -254,7 +261,21 @@ func (t *Tx) finish() error {
 		}
 	}
 	if len(command.Writes) == 0 {
+		// Only explicitly opted-in readers backed by a coherent stamped snapshot may
+		// omit final validation. Legacy readers and every management transaction retain
+		// Check/CAS. This is a read-only API: callbacks cannot upgrade themselves.
+		if t.snapshot {
+			if b, ok := t.backend.(interface{ CoherentSnapshot() bool }); ok && b.CoherentSnapshot() {
+				return nil
+			}
+		}
 		return t.backend.Check(t.ctx, command.Checks)
 	}
 	return t.backend.Commit(t.ctx, command)
+}
+
+// RunSnapshot reads a coherent leader snapshot without final validation. It is
+// explicit at serving call sites; ordinary Run retains its existing semantics.
+func (s *Store) RunSnapshot(ctx context.Context, fn func(*Tx) error) error {
+	return s.run(ctx, kv.Replicated, true, fn)
 }

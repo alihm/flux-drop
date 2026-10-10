@@ -130,3 +130,5 @@ func (c *Client) readSnapshot(ctx context.Context, keys []string, stamp *readSta
 	r, err := c.call(ctx, rpcRequest{Method: "snapshot_read", Keys: keys, Stamp: stamp})
 	return r.Records, r.Stamp, err
 }
+
+func (b *transactionBackend) CoherentSnapshot() bool { return !b.legacy && b.stamp != nil }

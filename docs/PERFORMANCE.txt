@@ -101,3 +101,9 @@ to 150000; DROP_LOAD_SLOW_MS pauses after chunks to emulate slow consumers.
 It reports real transport-error durations, elapsed time, total/successful rps,
 bytes and status counts. It is closed-loop and cannot establish maximum sustained
 capacity. Never use production as an unapproved load fixture.
+
+Serving snapshot optimization is explicit: RunSnapshot may skip final Check only
+on a coherent stamped backend; legacy reads retain Check. Run/RunContent and
+writes retain their original checks and durability. Immediate primary cache hits
+use initial delivery authorization; each caller after shared remote fetching
+performs its own post-fetch policy lookup. Preview IO retains final validation.

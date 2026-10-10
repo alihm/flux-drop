@@ -146,3 +146,45 @@ func TestReadOnlyRetriesChangedAuthorization(t *testing.T) {
 		t.Fatal("stale authorization read accepted", calls, err)
 	}
 }
+
+type snapshotTestBackend struct {
+	*testmetadata.Backend
+	checks   int
+	coherent bool
+}
+
+func (b *snapshotTestBackend) Check(ctx context.Context, c []kv.Check) error {
+	b.checks++
+	return b.Backend.Check(ctx, c)
+}
+func (b *snapshotTestBackend) CoherentSnapshot() bool { return b.coherent }
+func TestExplicitSnapshotReadsOnlySkipCoherentFinalCheck(t *testing.T) {
+	b := &snapshotTestBackend{Backend: &testmetadata.Backend{}}
+	s := &Store{Backend: b}
+	ctx := context.Background()
+	if e := s.Run(ctx, func(tx *Tx) error { return tx.Set("tests/snapshot", "yes") }); e != nil {
+		t.Fatal(e)
+	}
+	read := func(tx *Tx) error { return tx.Get("tests/snapshot", nil) }
+	for _, coherent := range []bool{false, true} {
+		b.coherent = coherent
+		b.checks = 0
+		if e := s.RunSnapshot(ctx, read); e != nil {
+			t.Fatal(e)
+		}
+		expected := 1
+		if coherent {
+			expected = 0
+		}
+		if b.checks != expected {
+			t.Fatal(coherent, b.checks)
+		}
+	}
+	b.checks = 0
+	if e := s.Run(ctx, read); e != nil || b.checks != 1 {
+		t.Fatal("management Check removed", e, b.checks)
+	}
+	if e := s.RunSnapshot(ctx, func(tx *Tx) error { return tx.Set("tests/snapshot", "no") }); !errors.Is(e, kv.ErrInvalid) {
+		t.Fatal("read-only facility wrote", e)
+	}
+}

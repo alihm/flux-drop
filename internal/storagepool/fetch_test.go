@@ -187,3 +187,24 @@ func TestFetchConfiguration(t *testing.T) {
 		t.Fatal(c, e)
 	}
 }
+
+func TestWarmHitDoesNotRepeatAuthorization(t *testing.T) {
+	_, _, p := fixture(t, t.TempDir(), nil)
+	staged := stagedHTML(t, "<h1>hit</h1>")
+	pr := prepared(staged)
+	if e := p.Install(context.Background(), pr, staged); e != nil {
+		t.Fatal(e)
+	}
+	calls := 0
+	check := func(context.Context) error { calls++; return nil }
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		p.ServeAuthorizedProject(rec, httptest.NewRequest("GET", "/", nil), pr.Project, "index.html", check)
+		if rec.Code != 200 {
+			t.Fatal(rec.Code)
+		}
+	}
+	if calls != 1 {
+		t.Fatal("warm hit repeated authorization", calls)
+	}
+}
