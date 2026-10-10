@@ -2,11 +2,15 @@ package storagepool
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -27,11 +31,19 @@ func TestPrimaryCacheNginx(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.EnableNginxCache()
+	if runtime, ok := any(p).(interface{ EnableNginxCache() }); ok {
+		runtime.EnableNginxCache()
+	}
 	payload := "<!doctype html><h1>cached HTML</h1>" + strings.Repeat("<!-- content -->", 200)
 	sources := []content.Source{{Name: "index.html", Open: func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(payload)), nil }}, {Name: "app.js", Open: func() (io.ReadCloser, error) {
 		return io.NopCloser(strings.NewReader("console.log('cached asset');")), nil
 	}}}
+	for i := 2; i < 50; i++ {
+		sources = append(sources, content.Source{Name: fmt.Sprintf("asset%d.js", i), Open: func() (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader(strings.Repeat("console.log('asset');", 200))), nil
+		}})
+	}
+
 	staged, err := content.StageFolder(t.TempDir(), sources, content.DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
@@ -92,6 +104,53 @@ func TestPrimaryCacheNginx(t *testing.T) {
 		return res, string(body)
 	}
 	path := "/" + pr.Project.Slug + "/"
+
+	if os.Getenv("DROP_TEST_PRIMARY_LOAD") == "1" {
+		paths := []string{}
+		for _, f := range staged.Manifest.Files {
+			paths = append(paths, path+f.Path)
+		}
+		raw, _ := json.Marshal(paths)
+		pathsFile := filepath.Join(t.TempDir(), "paths.json")
+		os.WriteFile(pathsFile, raw, 0600)
+		for _, scenario := range []struct{ name, count, concurrency, slow string }{{"cold", "200", "200", "0"}, {"warm", "400", "50", "0"}, {"slow", "200", "50", "10"}, {"overload", "2000", "256", "0"}} {
+			driver := os.Getenv("DROP_LOAD_DRIVER")
+			if driver == "" {
+				driver = filepath.Join("..", "..", "scripts", "serving-load.mjs")
+			}
+			cmd := exec.Command("node", driver, "http://127.0.0.1:8080", path, scenario.count, scenario.concurrency)
+			cmd.Env = append(os.Environ(), "DROP_LOAD_PATHS="+pathsFile, "DROP_LOAD_TIMEOUT_MS=150000", "DROP_LOAD_SLOW_MS="+scenario.slow)
+			out, e := cmd.CombinedOutput()
+			if e != nil {
+				t.Fatal(e, string(out))
+			}
+			t.Logf("nginx scenario=%s files=50\n%s", scenario.name, out)
+			var memory runtime.MemStats
+			runtime.ReadMemStats(&memory)
+			fds, _ := os.ReadDir("/proc/self/fd")
+			var cacheBytes int64
+			var cacheFiles int
+			filepath.WalkDir("/var/lib/drop-cluster/storage-cache", func(_ string, entry os.DirEntry, err error) error {
+				if err == nil && !entry.IsDir() {
+					if info, err := entry.Info(); err == nil {
+						cacheBytes += info.Size()
+						cacheFiles++
+					}
+				}
+				return nil
+			})
+			t.Logf("resources scenario=%s heapBytes=%d descriptors=%d cacheFiles=%d cacheLogicalBytes=%d", scenario.name, memory.HeapAlloc, len(fds), cacheFiles, cacheBytes)
+			if metrics, ok := any(p).(interface{ ServingMetrics() map[string]any }); ok {
+				raw, _ := json.Marshal(metrics.ServingMetrics())
+				t.Logf("serving metrics scenario=%s %s", scenario.name, raw)
+			}
+			for _, name := range []string{"cpu.stat", "memory.current", "memory.peak"} {
+				if value, err := os.ReadFile(filepath.Join("/sys/fs/cgroup", name)); err == nil {
+					t.Logf("cgroup scenario=%s %s: %s", scenario.name, name, strings.TrimSpace(string(value)))
+				}
+			}
+		}
+	}
 	res, body := call("GET", path, nil)
 	if res.StatusCode != 200 || body != payload || !strings.HasPrefix(res.Header.Get("Content-Type"), "text/html") || res.Header.Get("ETag") == "" {
 		t.Fatal(res.StatusCode, res.Header, body)

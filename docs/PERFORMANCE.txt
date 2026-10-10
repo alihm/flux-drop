@@ -6,6 +6,7 @@ It warms persistent connections, discovers up to 20 Explore thumbnails and the
 same-origin src/href assets of the selected site, and reports status counts and
 p50/p95/p99 milliseconds. It never sends credentials or changes projects.
 
+Historical measurements from the earlier serving release (not the 15f8309 plan baseline):
 Controlled handler benchmark, 400 requests / 50 connections / 20 thumbnails /
 30 site assets, using identical test fixtures on commit 3d6d047 and this change:
                        before p50/p95/p99        after p50/p95/p99 (ms)
@@ -44,7 +45,7 @@ HTTP access to /debug/pprof/; never publish this socket externally.
 
 Integrity and authorization
 The integrity LRU is process-local: at most 256 versions and 32768 aggregate
-stat/manifest entries. Eight cold verifications may run at once; concurrent
+stat/manifest entries. DROP_VERSION_VERIFY_CONCURRENCY defaults to eight cold verifications at once; concurrent
 requests for one version share a verification. Cache hits compare the manifest,
 requested file and ancestor directories' inode, size, mode and modification time.
 Changes trigger a complete manifest/hash verification. This relies on published
@@ -124,3 +125,108 @@ Prefetch decision: omitted/disabled. No controlled foreground measurements have
 yet demonstrated a benefit without contention. Foreground singleflight/cache
 work is implemented independently; background slots alone would not establish
 safe transport/disk priority.
+
+Serving plan final verification and measurements (2026-10-10)
+Implementation: workstreams 0-4 on serving-plan-implementation, baseline 15f8309.
+Optional prefetch remains omitted. All work/images are local; no push/deploy.
+
+Fixed-resource nginx comparison
+The same opt-in TestPrimaryCacheNginx and serving-load.mjs were copied into an
+isolated detached 15f8309 worktree and compiled against each implementation.
+Topology: Node driver -> actual nginx -> Go primary -> pinned TLS httptest
+secondary, all in one network-isolated container. Project metadata resolver is a
+static test double: this measures bytes/cache/download admission, NOT Raft latency.
+Dataset: one version, 50 files, 204863 total logical bytes (index.html about 3 KiB,
+a tiny app.js, and 48 approximately 4 KiB scripts). No artificial secondary delay
+in this nginx fixture. Separate Go-only measurements injected 10 ms per secondary
+request; they are not included in the nginx table below. Cache limit 256 MiB in
+both versions. Implementation fetch defaults 32 workers/1024 queue; baseline four
+workers/immediate rejection. Docker test Go 1.25.0 and nginx 1.30.5; production
+image builds Go 1.27.1. Client, TLS secondary and nginx share the resource quota.
+
+Each fresh container: --cpus=2 --memory=1g --memory-swap=1g --network none,
+read-only root, non-root UID/GID 65534, no capabilities/new privileges; tmpfs
+/tmp, /data, /var/lib/drop-cluster. tmpfs is memory-backed, not production disk.
+Both fixtures use their shipped static nginx config; production's supervisor-
+generated quota-aware worker count is verified separately by startup/unit tests.
+No production caches, endpoints or volumes were touched.
+
+Five pairs ran, sequentially before/after. Pairs 1-2 are exploratory (pair 1
+also overlapped startup/microbenchmark work), and are excluded from the summary.
+Pairs 3-5 ran with builds and integration workloads stopped. Each pair exercises:
+200 cold / concurrency 200, 400 post-cold / 50, 200 slow / 50 (10 ms pause per
+body chunk), then 20000 cached / 256. Last scenario lasts about 6-7 seconds;
+it is a short sustained closed-loop run, not a saturation/capacity certificate.
+Baseline cold rejections leave an incomplete cache, so the post-cold scenario
+is NOT a comparison of two fully warm caches. Cached overload is fully warm.
+
+Medians across quiet runs 3-5; latency includes errors and is in milliseconds:
+scenario       version  total/success rps  success/vCPU   p50/p95/p99
+cold           before   1178.8/41.3         20.6           111.89/133.32/161.71
+cold           after     770.0/770.0       385.0           175.67/231.85/235.47
+post-cold      before   1482.3/1230.3      615.2            24.69/60.03/78.64
+post-cold      after    1498.9/1498.9      749.4            25.88/64.88/94.71
+slow           before   1250.0/1250.0      625.0            31.81/68.51/76.20
+slow           after    1492.8/1492.8      746.4            25.20/80.44/82.65
+cached 20000   before   2864.4/2864.4     1432.2            83.59/158.33/244.81
+cached 20000   after    3009.2/3009.2     1504.6            82.44/128.04/196.40
+
+Per-run status counts (runs 3/4/5); zero transport errors in every scenario:
+cold before: 200=4/7/16; 503=196/193/184. After: 200=200/200/200.
+post-cold before: 200=322/332/339; 503=78/68/61. After: 200=400/400/400.
+slow both: 200=200 each. Cached 20000 both: 200=20000 each. No other status.
+Transferred bytes: after cold/slow 819452, post-cold 1638904, cached 81945200
+per run. Baseline cold 12628/25228/50512; post-cold 1312269/1354269/1384634;
+slow/cached same as implementation. Lower failed-response latency is not faster
+successful delivery. Warm throughput varies; the clearest result is eliminating
+the old cold-slot 503 burst, not a universal latency or maximum-throughput claim.
+
+Cgroup CPU usage for each complete fixture, including Node/nginx/TLS secondary:
+before 16.070/16.484/15.728 CPU-seconds; after 16.396/14.414/15.509.
+Cgroup memory.peak: before 96.06/96.97/95.64 MB; after 120.54/119.27/118.31 MB.
+Final memory.current: before 22.84-23.36 MB; after 43.98-44.42 MB.
+Final Go descriptors: before 79; after 275-278 (larger keepalive pools).
+Final retained disk namespace both: 50 files/204863 logical bytes. Implementation
+charges 606208 block-rounded file/entry bytes, plus 21997 approximate manifest
+bytes. After each run: zero active fetches, waiting readers, flights, temporary
+bytes/files and retired bytes; queue-full/wait-timeout/disk-failure/retry counters
+zero. Shared downloads 147-150. These are final gauges, not measured queue peaks.
+Cache files intentionally remain until pool/container cleanup; all disposable
+containers/volumes were removed. Unit tests independently exercise cache-disabled
+spools, retirement/pins/unlink handling, admission pressure and cancellation.
+
+Reproduce (from root, fixture image names arbitrary local tags):
+  docker build -f tests/delivery/Dockerfile -t drop-serving-measurement .
+The opt-in fixture defaults to 2000 overload requests. The recorded longer run
+used the same installed driver with this temporary wrapper at /tmp/load-long.mjs:
+  if (process.argv[4] === '2000') process.argv[4] = '20000';
+  await import('file:///usr/local/lib/serving-load.mjs');
+  docker run --rm --network none --read-only --cpus=2 --memory=1g --memory-swap=1g \
+    --tmpfs /tmp --tmpfs /data:uid=65534,gid=65534,mode=0700 \
+    --tmpfs /var/lib/drop-cluster:uid=65534,gid=65534,mode=0700 \
+    --cap-drop ALL --security-opt no-new-privileges \
+    -e DROP_TEST_NGINX=1 -e DROP_TEST_PRIMARY_LOAD=1 \
+    -e DROP_LOAD_DRIVER=/load-long.mjs -v /tmp/load-long.mjs:/load-long.mjs:ro \
+    drop-serving-measurement
+For the baseline, copy only the same load driver and nginx measurement test into
+a detached 15f8309 worktree and build its tests/delivery/Dockerfile with the same
+Node driver installation. EnableNginxCache is optional in the test so the baseline
+uses its genuine Go-streamed cache path. Never substitute production volumes.
+
+Metadata protocol evidence
+TestRuntimeLifecycle uses actual mTLS coordinator/client transport and counts
+method/destination RPCs: public positive resolution uses two local_snapshot_local
+RPCs, zero leader RPCs, and does not modify cached leader routing. Coherent local
+reads during isolation and changed restore generations are covered separately.
+Private access adds session plus session/grant/project snapshots. Missing preview
+confirmation additionally checks each caller's IO with the confirming leader.
+Confirmation aggregate 64 * number of primaries is a configured upper bound, not
+a measured aggregate production rate. No cross-node latency is inferred from the
+static-resolver nginx measurements. Config and warm Explore avoid metadata work;
+thumbnail and serving timing remain instrumented with Server-Timing.
+
+Handler-only follow-up: BenchmarkSiteAssets 60233 ns/op versus baseline 60533;
+not an end-to-end claim. The mixed handler follow-up overlapped other fixture
+work and is not used as controlled evidence. Production HTTPS/TLS/Flux network,
+real Syncthing lag, long clients/large sites and maximum sustainable capacity
+remain live acceptance measurements, outside this authorized local exercise.

@@ -7,6 +7,9 @@ COPY tests/delivery ./tests/delivery
 RUN CGO_ENABLED=0 go test -c -o /delivery.test ./tests/delivery && CGO_ENABLED=0 go test -c -o /storagepool.test ./internal/storagepool
 
 FROM nginx:1.30.5-alpine
+RUN apk add --no-cache nodejs
+COPY scripts/serving-load.mjs /usr/local/lib/serving-load.mjs
+ENV DROP_LOAD_DRIVER=/usr/local/lib/serving-load.mjs
 COPY --from=build /delivery.test /usr/local/bin/delivery.test
 COPY --from=build /storagepool.test /usr/local/bin/storagepool.test
 COPY deploy/nginx.conf /etc/nginx/nginx.conf

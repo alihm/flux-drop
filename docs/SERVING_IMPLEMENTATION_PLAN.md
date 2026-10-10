@@ -1,8 +1,10 @@
 # Serving performance implementation and verification plan
 
-Status: implementation handoff; no workstream is implemented or verified by this document.
+Status: workstreams 0–4 implemented on `serving-plan-implementation`; verification passed;
+measurement results and practical limits are recorded below. Optional workstream 5 is omitted.
 
-Reviewed checkout: `ea095fb`. Find code by function/type when paths or details have moved.
+Reviewed checkout: `ea095fb`. Pulled baseline: `15f8309`. Find code by function/type
+when paths or details have moved.
 
 ## Objective and execution rules
 
@@ -242,3 +244,93 @@ The implementing agent must provide:
 7. Confirmation that nothing was pushed or deployed.
 
 Do not claim full completion while required checks remain unrun or failing. Keep implementation, verification, and measurement status distinct.
+
+
+## Implementation record (2026-10-10)
+
+Branch: `serving-plan-implementation`, created after a clean fast-forward pull of
+`main` to `15f8309`. This document's reviewed checkout predates that baseline.
+Nothing has been pushed or deployed; Docker images and fixtures are local only.
+
+| Workstream | Commit | Result |
+| --- | --- | --- |
+| 0 | `d15a501` | Baseline, explicit cold paths, closed-loop load/error reporting |
+| 1 | `24c3e61` | Bounded shared fetching, verified manifest LRU, spool ownership |
+| 2 | `183a5a6` | Explicit pure coherent snapshots, immediate cache-hit optimization |
+| 3 | `1267bc7` | Local authenticated snapshots, explicit repositories, bounded confirmations |
+| 4 | `58f4460` | Cache retirement, nginx aliases, secondary hashes, runtime, protected metrics |
+| 4 correction | `036cd5d` | Positive nginx connection count at minimum supported nofile |
+| 3 correction | `651286d` | Per-caller preview IO validation after leader confirmation |
+| 5 | Omitted | No measured evidence that prefetch improves foreground performance safely |
+
+Implementation choices and limits:
+
+- Fetch concurrency/queue/spool defaults are 32/1024/800 MiB. Retained cache stays
+  256 MiB and 4096 entries. Parsed manifests are bounded to 256 entries/64 MiB.
+  See STORAGE_POOL.md and .env.example for validated ranges and ownership.
+- Serving uses the local coordinator on followers; HTTP traffic is not redirected
+  to the leader. Normal public resolution uses two local snapshot RPCs and zero
+  leader RPCs. Management/writes keep their original leader paths. Private access
+  adds serving session and coherent session/grant/project reads; preview IO adds
+  a final local validation. Missing-record preview replay validates against the
+  confirming leader separately for each caller.
+- Confirmation bounds are per Store/process: 64 distinct active lookups and 256
+  callers, including duplicate waiters. Aggregate admitted work scales with the
+  primary instance count; it is not a cluster-wide 64-work limit.
+- The nginx handoff requires nginx to open its verified retained file within 60
+  seconds. Retirement is charged to the same bounded cache budget. Arbitrarily
+  suspended nginx cannot be made safe by a timer alone. Temporary and branded
+  responses stay in Go; cache-disabled operation retains a separate spool bound.
+- Hash caches rely on immutable published content. Descriptor identity includes
+  ctime as well as device/inode/size/mtime; before/after hashing is checked.
+- Memory splits are 45% HTTP + 20% coordinator, or 55% without a coordinator,
+  unless GOMEMLIMIT is explicit. Remaining memory includes Chromium, nginx and
+  page cache. Hidden cgroup ancestors cannot be inferred; these are soft limits.
+- Existing Raft Docker assertions assumed immediate follower visibility and
+  quorum-loss serving denial. The first run failed on a locally pending record.
+  Tests now poll only healthy-fixture site convergence (20-second test budget)
+  and explicitly verify isolated applied-state serving while management fails.
+  This is the accepted consistency change, not a production freshness guarantee.
+- No production network/load test, actual Syncthing replication, hidden cgroup
+  ancestor verification or maximum sustainable capacity certification was done.
+  Closed-loop measurements and local Docker fixtures cannot establish these.
+
+Validation and measured results: see PERFORMANCE.txt. Existing Docker fixture
+cleanup removes only each disposable project's resources. No auth bundle rebuild
+is needed because web/auth.js was unchanged.
+
+
+### Verification results
+
+All commands below exited 0 on Linux. Docker suites used isolated Compose project
+names and disposable volumes, with `down -v` cleanup for their own projects.
+
+| Check | Command / useful output |
+| --- | --- |
+| Full final race suite | `go test -race ./...` — all packages passed |
+| Static checks | `go vet ./...` — no findings |
+| Production commands | `go build ./cmd/...` — passed |
+| Repeated cluster races | `go test -race ./internal/cluster -count=5` — 478.415 seconds |
+| Admission/caller policy repeats | `go test -race ./internal/storagepool -run 'TestFetchQueueFull\|TestSharedFetchChecks' -count=5` — passed |
+| Final production image | `docker build -t flux-drop:serving-plan .` — passed |
+| Final role startup | `node tests/storagepool/smoke.mjs --image flux-drop:serving-plan` — both roles, supervision, identity persistence, isolation passed |
+| Final Raft image | `node tests/raft/run.mjs` after isolated Compose startup — cross-node OAuth/session/project lifecycle, leader loss, isolated local serving, management denial, restart passed |
+| Final automatic image | `node tests/automatic/run.mjs` after isolated Compose startup — stable identity, private files, no bootstrap on discovery outage passed |
+| Final staging image | `node tests/staging/run.mjs` after isolated Compose startup — publishing/auth/privacy lifecycle, metadata outage, supervisor restart passed |
+| Real nginx | Docker tests/delivery fixture — MIME, headers, HEAD, ranges, 304, public/private cache, branding, internal alias rejection passed |
+| Browser isolation | `cd tests/browser && npx playwright test` with its Compose fixture — 147 passed in Chromium/Firefox/WebKit |
+| Repeated fixed-resource nginx loads | Same baseline/implementation driver, five pairs, quiet pairs 3–5 reported in PERFORMANCE.txt — every fixture exited 0; baseline HTTP 503 counts are retained |
+
+The first final-image rerun used a new Compose project name without tagging its
+already-built fixture image and failed before app startup. The disposable stack
+was cleaned up, fixture/Auth image aliases were corrected, and all final-image
+suites reran successfully. No production behavior was bypassed.
+
+The tests cover bounded downloads, independent readers/cancellation, per-caller
+policy checks, cache-disabled ownership, manifest/hash corruption/failover,
+coherent local reads/restore/conflicts, confirmation admission/negative TTL,
+post-IO preview validation, unchanged management paths, retirement/LRU accounting,
+protected local metrics during leader failure, and runtime resource detection.
+Unperformed production acceptance measurements and the nginx-open/immutability
+assumptions are explicit above and in PERFORMANCE.txt; no capacity guarantee is
+inferred from these local checks.

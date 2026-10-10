@@ -25,12 +25,15 @@ runtime; storage-pool settings without a role are rejected.
   Reads verify the manifest and actual content. Failed or partial replicas are
   skipped; unavailable content returns 503, never an older version.
 - Each read checks locally replicated primary serving metadata/access policy before using cached
-  bytes, and rechecks authority, policy, version and any private grant immediately
-  before responding after a cache verification or remote fetch. Private hosting retains the existing self-contained HTML restriction.
+  bytes, and rechecks policy, version and any private grant after a remote fetch.
+  An immediate verified cache hit uses the initial per-request authorization.
+  Private hosting retains the existing self-contained HTML restriction.
 - Operations are idempotent. Lost responses may have succeeded: retry the same
   original upload/key, not a different operation. Pending operations expire after
   15 minutes. Retries never move a project or charge the same operation twice.
-- Delete/expiry revoke access through authoritative metadata. Retained app and
+- Delete/expiry update authoritative metadata; serving observes deletion when
+  replicated locally, with no maximum delay, and checks known expiry immediately.
+  Retained app and
   owner byte charges are not refunded on abort/delete/expiry. Physical retirement,
   replica-wide garbage collection, and automatic app draining/migration are not
   exposed by this protocol. Files might exist on offline/returning replicas;
