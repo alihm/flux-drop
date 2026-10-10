@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/runonflux/flux-drop/internal/analytics"
 	"github.com/runonflux/flux-drop/internal/metadata"
 	"github.com/runonflux/flux-drop/internal/project"
 	"github.com/runonflux/flux-drop/internal/replica"
@@ -205,6 +206,29 @@ func TestCoordinatorRuntimeLifecycle(t *testing.T) {
 		metadataClient.mu.Unlock()
 		if !sameLeader {
 			t.Fatal("local RPC poisoned leader routing")
+		}
+		// Page-view submission traverses the same real mTLS membership/routing
+		// boundary, but never creates a metadata transaction or Raft record.
+		now := time.Now().UTC()
+		var hourly [24]uint64
+		hourly[now.Hour()] = uint64(i + 1)
+		snapshot := analytics.Snapshot{Node: c.Local.ID, Producer: strings.Repeat("a", 32), Day: analytics.Day(now).Format("2006-01-02"), Shard: strings.IndexByte("0123456789abcdef", published.ID[0]), Sequence: 1, UpdatedAt: now, Projects: map[string][24]uint64{published.ID: hourly}}
+		if e := metadataClient.SubmitPageViews(ctx, snapshot); e != nil {
+			t.Fatal("authenticated analytics submission", e)
+		}
+		if e := metadataClient.SubmitPageViews(ctx, snapshot); e != nil {
+			t.Fatal("analytics retry", e)
+		}
+		result, e := metadataClient.PageViews(ctx, analytics.Query{ProjectID: published.ID, From: analytics.Day(now), To: analytics.Day(now).Add(24 * time.Hour), Interval: "hour"})
+		if e != nil || result.PageViews != uint64(i+1) {
+			t.Fatal("analytics RPC result", result, e)
+		}
+		snapshot.Node = "impersonated"
+		if _, e := metadataClient.call(ctx, rpcRequest{Method: "analytics_put", Analytics: &snapshot}); e != ErrInvalid {
+			t.Fatal("server accepted analytics node spoof", e)
+		}
+		if e := metadataClient.SubmitPageViews(ctx, snapshot); e != ErrInvalid {
+			t.Fatal("analytics node spoof accepted", e)
 		}
 		if _, _, err := sessions.Logout(ctx, token, view.Record.CSRF); err != nil {
 			t.Fatal(err)

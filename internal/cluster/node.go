@@ -19,6 +19,7 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/raft"
 	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
+	"github.com/runonflux/flux-drop/internal/analytics"
 	"github.com/runonflux/flux-drop/internal/kv"
 	"golang.org/x/sync/singleflight"
 )
@@ -26,24 +27,27 @@ import (
 const operationTimeout = 5 * time.Second
 
 type Node struct {
-	readFence  singleflight.Group
-	readMu     sync.Mutex
-	readLease  time.Time
-	readTerm   uint64
-	raft       *raft.Raft
-	state      *state
-	store      *raftboltdb.BoltStore
-	transport  raft.Transport
-	config     Config
-	started    time.Time
-	localEpoch string
-	operations chan struct{}
-	changeMu   sync.Mutex
-	closeOnce  sync.Once
-	closeErr   error
-	enrollment *enrollment // configured before listeners/workers start
-	async      *asyncWriter
-	auto       *automatic
+	analytics       *analytics.Archive
+	analyticsCancel context.CancelFunc
+	analyticsDone   chan struct{}
+	readFence       singleflight.Group
+	readMu          sync.Mutex
+	readLease       time.Time
+	readTerm        uint64
+	raft            *raft.Raft
+	state           *state
+	store           *raftboltdb.BoltStore
+	transport       raft.Transport
+	config          Config
+	started         time.Time
+	localEpoch      string
+	operations      chan struct{}
+	changeMu        sync.Mutex
+	closeOnce       sync.Once
+	closeErr        error
+	enrollment      *enrollment // configured before listeners/workers start
+	async           *asyncWriter
+	auto            *automatic
 }
 
 // start accepts a transport only internally; production callers use StartTLS.
@@ -117,6 +121,7 @@ func start(c Config, transport raft.Transport, tune func(*raft.Config)) (*Node, 
 			return nil, err
 		}
 	}
+	n.startAnalytics()
 	ok = true
 	return n, nil
 }
@@ -168,6 +173,11 @@ func bindIdentity(c Config, hasState bool) error {
 
 func (n *Node) Close() error {
 	n.closeOnce.Do(func() {
+		if n.analyticsCancel != nil {
+			n.analyticsCancel()
+			<-n.analyticsDone
+			_ = n.analytics.Close()
+		}
 		n.closeErr = n.raft.Shutdown().Error()
 		if n.async != nil {
 			n.async.close()

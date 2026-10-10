@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/raft"
+	"github.com/runonflux/flux-drop/internal/analytics"
 	"github.com/runonflux/flux-drop/internal/kv"
 	"github.com/runonflux/flux-drop/internal/replica"
 )
@@ -20,21 +21,24 @@ import (
 const metadataPath = "/_drop_cluster/metadata"
 
 type rpcRequest struct {
-	Stamp       *readStamp   `json:"stamp,omitempty"`
-	Prefix      string       `json:"prefix,omitempty"`
-	Cursor      string       `json:"cursor,omitempty"`
-	Limit       int          `json:"limit,omitempty"`
-	Method      string       `json:"method"`
-	Keys        []string     `json:"keys,omitempty"`
-	Checks      []Check      `json:"checks,omitempty"`
-	Transaction *Transaction `json:"transaction,omitempty"`
+	Analytics      *analytics.Snapshot `json:"analytics,omitempty"`
+	AnalyticsQuery *analytics.Query    `json:"analyticsQuery,omitempty"`
+	Stamp          *readStamp          `json:"stamp,omitempty"`
+	Prefix         string              `json:"prefix,omitempty"`
+	Cursor         string              `json:"cursor,omitempty"`
+	Limit          int                 `json:"limit,omitempty"`
+	Method         string              `json:"method"`
+	Keys           []string            `json:"keys,omitempty"`
+	Checks         []Check             `json:"checks,omitempty"`
+	Transaction    *Transaction        `json:"transaction,omitempty"`
 }
 type rpcResponse struct {
-	Stamp   *readStamp        `json:"stamp,omitempty"`
-	Next    string            `json:"next,omitempty"`
-	Records map[string]Record `json:"records,omitempty"`
-	Error   string            `json:"error,omitempty"`
-	Leader  *Member           `json:"leader,omitempty"`
+	Analytics *analytics.Result `json:"analytics,omitempty"`
+	Stamp     *readStamp        `json:"stamp,omitempty"`
+	Next      string            `json:"next,omitempty"`
+	Records   map[string]Record `json:"records,omitempty"`
+	Error     string            `json:"error,omitempty"`
+	Leader    *Member           `json:"leader,omitempty"`
 }
 
 // rpcHandler is reachable only through the status listener's mTLS boundary.
@@ -67,6 +71,11 @@ func (n *Node) rpcHandler(w http.ResponseWriter, r *http.Request, app string) {
 		http.Error(w, "invalid command", 400)
 		return
 	}
+	isAnalytics := request.Method == "analytics_put" || request.Method == "analytics_query"
+	if !isAnalytics && (request.Analytics != nil || request.AnalyticsQuery != nil) || isAnalytics && (request.Stamp != nil || request.Transaction != nil || len(request.Checks) != 0 || len(request.Keys) != 0 || request.Prefix != "" || request.Cursor != "" || request.Limit != 0) {
+		http.Error(w, "invalid command", 400)
+		return
+	}
 	// Followers return only an authenticated routing hint, never cached data.
 	if n.raft.State() != raft.Leader && request.Method != "local_snapshot" {
 		response := rpcResponse{Error: "not_leader"}
@@ -87,6 +96,30 @@ func (n *Node) rpcHandler(w http.ResponseWriter, r *http.Request, app string) {
 		return
 	}
 	switch request.Method {
+	case "analytics_put":
+		if request.Analytics == nil || request.AnalyticsQuery != nil || request.Analytics.Node != id {
+			err = ErrInvalid
+		} else if n.analytics == nil {
+			err = analytics.ErrUnavailable
+		} else {
+			// This is telemetry, not authorization: no Raft write or quorum fence.
+			// Immutable cumulative producer snapshots merge safely across old/new leaders.
+			err = analyticsError(n.analytics.Accept(r.Context(), *request.Analytics))
+		}
+	case "analytics_query":
+		if request.AnalyticsQuery == nil || request.Analytics != nil {
+			err = ErrInvalid
+		} else if n.analytics == nil {
+			err = analytics.ErrUnavailable
+		} else {
+			var result analytics.Result
+			result, err = n.analytics.Query(r.Context(), *request.AnalyticsQuery)
+			if err == nil {
+				response.Analytics = &result
+			}
+			err = analyticsError(err)
+		}
+
 	case "local_snapshot":
 		if request.Transaction != nil || len(request.Checks) != 0 {
 			err = ErrInvalid
