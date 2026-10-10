@@ -1,7 +1,19 @@
 # Public interface
 
-For fast local UI iteration, run `node ui-dev.mjs` at the repository root and
-open <http://127.0.0.1:5173/>. This localhost-only workbench reads the actual
+The production home page is a marketing landing page. Its header, hero and footer
+send visitors to <https://runonflux.com/apps/drop> for uploads, sign-in and site
+management. It retains the public Explore gallery, theme switch, feature sections
+and FAQ. Its small local script fetches public configuration/gallery data only;
+it does not load Firebase, bootstrap sessions, or render upload/account controls.
+Valid existing `#claim-token=...` fragments are carried to workspace links.
+
+The original workspace HTML/JS and all backend endpoints remain intact for future
+reuse. `LandingPage()` serves the production home route; `HomePage()` and
+`HomePageWithAuth()` retain the original renderer without exposing a new public
+workspace route. Both use the existing CSP-hashed embedded asset mechanism.
+
+For fast local iteration of the retained workspace UI, run `node ui-dev.mjs` at
+the repository root and open <http://127.0.0.1:5173/>. This localhost-only workbench reads the actual
 embedded home assets on every request, reloads the browser after edits, and uses
 an in-memory mock of the project API and Google sign-in. No Docker, Nginx, npm,
 or real credentials are required. The mock is intentionally separate from the
@@ -10,11 +22,11 @@ production binary and does not validate real authorization or ZIP extraction.
 The Go binary embeds the landing page, project dashboard, management dialog, and
 private-project unlock page. CSS and JavaScript are local assets embedded into the
 HTML under exact-hash Content Security Policy rules. No third-party fonts,
-analytics, or runtime UI packages are loaded. Google sign-in uses a locally built
-Firebase browser bundle only when the public Firebase web settings are configured.
+analytics, or runtime UI packages are loaded. The retained workspace uses a locally
+built Firebase browser bundle when public Firebase web settings are configured; the production landing page omits it.
 
-The landing page accepts a single HTML file, a ZIP, or a folder/multiple files
-with a root `index.html`. Folders can be selected or dragged onto the drop zone;
+The retained workspace UI accepts a single HTML file, a ZIP, or a folder/multiple
+files with a root `index.html`. Folders can be selected or dragged onto the drop zone;
 directory entries are read in batches and their relative paths are retained.
 If a browser cannot expose a dropped directory, the UI asks the visitor to use
 Choose folder instead. The page validates file count, total upload size, and the
@@ -52,7 +64,9 @@ and session credentials are not placed in URLs or persistent browser storage.
 Anonymous session failure is reported as the reason publishing is unavailable;
 selecting files does not hide that error.
 
-Browser tests exercise upload, retry, claim-after-sign-in, management, and empty
+Browser tests cover landing-page workspace links, the absence of session/login/
+upload requests, public previews, mobile layout, and the retained workspace
+flows: upload, retry, claim-after-sign-in, management, and empty
 states in Chromium, Firefox, and WebKit with intercepted test APIs. The Go suite
 checks the embedded page and CSP. Live Google popup, browser behavior against the
 real Flux load balancer, and actual file replication still need deployed

@@ -58,7 +58,7 @@ func NewWithDependencies(c Config, dependencies Dependencies) (http.Handler, err
 	if dependencies.Previews != nil {
 		registerPreviews(mux, dependencies)
 	}
-	mux.Handle("/{$}", HomePageWithAuth(dependencies.FirebaseWeb))
+	mux.Handle("/{$}", LandingPage())
 	mux.Handle("GET /agents", AgentGuide())
 	mux.Handle("HEAD /agents", AgentGuide())
 	mux.Handle("/unlock/", UnlockPage())

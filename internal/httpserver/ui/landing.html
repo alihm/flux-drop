@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Drop an HTML file, ZIP, or folder and get a live link in seconds. Free static hosting on the Flux network. No account or build step required.">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#0b121c" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f6f8fb" media="(prefers-color-scheme: light)">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Flux Drop">
+  <meta property="og:title" content="Flux Drop · Publish a static site in seconds">
+  <meta property="og:description" content="Drop an HTML file, ZIP, or folder and get a live link. Free static hosting on the Flux network. No account or build step.">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:site" content="@RunOnFlux">
+  <meta name="twitter:title" content="Flux Drop · Publish a static site in seconds">
+  <meta name="twitter:description" content="Drop an HTML file, ZIP, or folder and get a live link. No account or build step.">
+  <title>Flux Drop · Publish a static site in seconds</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23101722'/%3E%3Cpath d='M32 10v30m-11-11 11 11 11-11M16 46h32' stroke='%2362e2c4' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <style>{{.CSS}}</style>
+</head>
+<body class="public-landing">
+  <a class="skip-link" href="#get-started">Skip to get started</a>
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a class="brand" href="/" aria-label="Flux Drop home"><svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15"/><path d="M32 13v26m-10-10 10 10 10-10M18 47h28"/></svg><span class="brand-word">flux<span>drop</span></span></a>
+      <nav class="header-actions" aria-label="Main navigation">
+        <a class="nav-link" href="#how-it-works">How it works</a>
+        <a class="nav-link" href="#features">Features</a>
+        <a class="nav-link" href="#faq">FAQ</a>
+        <a class="nav-link" href="/agents">For agents</a>
+        <a id="explore-nav" class="nav-link" href="#explore" hidden>Explore</a>
+        <button id="theme-toggle" class="icon-button ghost" type="button" aria-label="Switch color theme"><svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></svg></button>
+        <a class="button-link landing-link" href="https://runonflux.com/apps/drop">Open Drop <span aria-hidden="true">↗</span></a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="shell">
+    <main>
+      <div class="intro">
+        <h1>Drop your files.<br><em>Share your site.</em></h1>
+        <p class="lede">Publish HTML, CSS, JavaScript, and assets to a live link in seconds. No build step. Powered by the Flux decentralized cloud.</p>
+        <div id="get-started" class="landing-cta">
+          <a id="start-publishing" class="button-link landing-primary landing-link" href="https://runonflux.com/apps/drop">Start publishing <span aria-hidden="true">↗</span></a>
+          <p>Upload, sign in, and manage your sites in the Flux Apps workspace.</p>
+          <a class="landing-domain landing-link" href="https://runonflux.com/apps/drop">runonflux.com/apps/drop</a>
+        </div>
+      </div>
+
+      <section id="explore" class="band explore" aria-labelledby="explore-heading" hidden>
+        <div class="section-heading"><div><p class="kicker">Made by the community</p><h2 id="explore-heading">See what others deployed</h2><p class="field-hint">Fresh ideas, little experiments, and sites worth a look. Explore recent public sites claimed by their creators.</p></div><button id="refresh-explore" type="button" class="secondary">Refresh</button></div>
+        <p id="explore-status" class="field-hint" role="status" aria-live="polite"></p>
+        <div id="explore-list" class="explore-grid"></div>
+      </section>
+
+      <section id="how-it-works" class="band" aria-labelledby="how-heading">
+        <div class="section-intro"><p class="kicker">How it works</p><h2 id="how-heading">From files to a live link in three steps</h2></div>
+        <ol class="steps">
+          <li><span class="step-number" aria-hidden="true">1</span><h3>Open Flux Drop</h3><p>Head to <a class="landing-link" href="https://runonflux.com/apps/drop">Flux Apps</a> and choose one HTML file, a ZIP, or a folder with an <code>index.html</code> at its root. Files are served exactly as you upload them.</p></li>
+          <li><span class="step-number" aria-hidden="true">2</span><h3>Get a live URL</h3><p>Pick a name or keep our suggestion. Update the site any time and the link stays the same.</p></li>
+          <li><span class="step-number" aria-hidden="true">3</span><h3>Claim to keep it</h3><p>No account is needed to publish. Sign in to claim your site, keep it beyond 7 days, and manage it from any device.</p></li>
+        </ol>
+      </section>
+
+      <section id="features" class="band" aria-labelledby="features-heading">
+        <div class="section-intro"><p class="kicker">Why Flux Drop</p><h2 id="features-heading">Simple hosting, built on a resilient network</h2></div>
+        <ul class="features">
+          <li><span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="5" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="m7.2 10.9 9.6-4.8m-9.6 7 9.6 4.8"/></svg></span><h3>Replicated on Flux</h3><p>Sites are stored on multiple independent Flux nodes, so one machine going offline does not take your link down.</p></li>
+          <li><span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 15 15 9M10.5 6.5l1.8-1.8a4.2 4.2 0 0 1 6 6l-1.8 1.8m-3 3-1.8 1.8a4.2 4.2 0 0 1-6-6l1.8-1.8"/></svg></span><h3>One link, every update</h3><p>Replace your files from the site settings. Visitors keep using the same URL.</p></li>
+          <li><span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span><h3>Password-protected pages</h3><p>Publish a self-contained HTML page as private from the start. Visitors need the password you set to open it.</p></li>
+          <li><span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.5 3 8.5 7 10 4-1.5 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg></span><h3>Sandboxed by default</h3><p>Every site runs in an isolated sandbox, so uploaded pages cannot read cookies or act on your account.</p></li>
+          <li><span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/></svg></span><h3>No build, no setup</h3><p>No CLI, Git repository, or configuration. Works with plain HTML and prebuilt React or Vue bundles.</p></li>
+          <li><span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 17h4v4h-4"/></svg></span><h3>Share anywhere</h3><p>Copy the link or scan a QR code to open your site on a phone.</p></li>
+        </ul>
+      </section>
+
+      <section id="faq" class="band" aria-labelledby="faq-heading">
+        <div class="section-intro"><p class="kicker">FAQ</p><h2 id="faq-heading">Common questions</h2></div>
+        <div class="faq">
+          <details><summary>What files should I upload?</summary><div><p>A single HTML file becomes your site’s <code>index.html</code>. For a multi-file site, choose a folder or ZIP whose root contains <code>index.html</code>. Keep asset links relative, like <code>assets/style.css</code>, so they work under your site URL.</p><pre>my-site/
+  index.html
+  assets/
+    style.css
+    app.js</pre></div></details>
+          <details><summary>What happens after 7 days?</summary><div><p>Sites published without an account expire 7 days after publishing, and their links stop working. Sign in to claim a site and keep it with no expiry. Claimed sites appear in your workspace on any device where you sign in.</p></div></details>
+          <details><summary>Can I update a site without changing its link?</summary><div><p>Yes. Visit <a class="landing-link" href="https://runonflux.com/apps/drop">your Flux Drop workspace</a> and open <strong>Manage</strong> on the site card and replace the content with a new HTML file, ZIP, or folder. The URL stays the same. Available names use a clean URL; a taken name gets a short suffix. Old links redirect after a rename.</p></div></details>
+          <details><summary>Do React, Vue, or other single-page apps work?</summary><div><p>Prebuilt bundles work. Upload the build output (for example <code>dist/</code> or <code>build/</code>), not the source. Configure your build to use relative asset paths. Because each site is sandboxed, apps that rely on cookies, <code>localStorage</code>, or service workers may behave differently.</p></div></details>
+          <details><summary>How private are password-protected sites?</summary><div><p>Turn on <strong>Private</strong> when you publish, or later from <strong>Manage</strong>. Private sites are only served after a visitor enters the correct password. Access is temporary and stays in that browser. Private hosting currently supports self-contained HTML pages, with styles and scripts inlined.</p></div></details>
+          <details><summary>What are the limits?</summary><div><p>Each upload can be up to <span class="limit-bytes">50 MiB</span> and <span class="limit-files">5,000</span> files, and only static files are served. There is no server-side code, database, or form handling.</p></div></details>
+          <details><summary>What content is not allowed?</summary><div><p>Phishing, malware, impersonation, illegal content, and anything that violates the <a href="https://runonflux.com/terms-of-service/" target="_blank" rel="noopener noreferrer">Flux Terms of Service</a> is removed. To report a site, contact <a href="https://support.runonflux.io/support/home" target="_blank" rel="noopener noreferrer">Flux Support</a> with its link.</p></div></details>
+          <details><summary>Where do I go for more hosting power?</summary><div><p>For apps that need a backend, databases, or Git-based deploys, try <a href="https://orbit.runonflux.com" target="_blank" rel="noopener noreferrer">Orbit</a> or <a href="https://cloud.runonflux.com/" target="_blank" rel="noopener noreferrer">FluxCloud</a>.</p></div></details>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="shell">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a class="brand" href="/" aria-label="Flux Drop home"><svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15"/><path d="M32 13v26m-10-10 10 10 10-10M18 47h28"/></svg><span class="brand-word">flux<span>drop</span></span></a>
+          <p>Small sites, ready to share. Part of the Flux decentralized cloud.</p>
+          <div class="socials">
+            <a href="https://x.com/RunOnFlux" target="_blank" rel="noopener noreferrer" aria-label="Flux on X"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M17.8 3h3.1l-6.8 7.7L22 21h-6.2l-4.9-6.4L5.3 21H2.2l7.2-8.3L2 3h6.4l4.4 5.8L17.8 3Zm-1.1 16.2h1.7L7.4 4.7H5.6l11.1 14.5Z"/></svg></a>
+            <a href="https://discord.com/invite/runonflux" target="_blank" rel="noopener noreferrer" aria-label="Flux on Discord"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M19.3 5.3A17 17 0 0 0 15 4l-.5 1.1a15.6 15.6 0 0 0-5 0L9 4a17 17 0 0 0-4.3 1.3C2 9.4 1.2 13.3 1.6 17.2a17 17 0 0 0 5.3 2.7l1.1-1.8c-.6-.2-1.2-.5-1.7-.8l.4-.3a12.2 12.2 0 0 0 10.6 0l.4.3c-.5.3-1.1.6-1.7.8l1.1 1.8a17 17 0 0 0 5.3-2.7c.5-4.5-.8-8.4-3.1-11.9ZM8.7 14.8c-1 0-1.9-1-1.9-2.1s.8-2.1 1.9-2.1 1.9 1 1.9 2.1-.8 2.1-1.9 2.1Zm6.6 0c-1 0-1.9-1-1.9-2.1s.8-2.1 1.9-2.1 1.9 1 1.9 2.1-.8 2.1-1.9 2.1Z"/></svg></a>
+            <a href="https://github.com/runonflux" target="_blank" rel="noopener noreferrer" aria-label="Flux on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.4-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.4 1.1 2.9.8.1-.6.4-1.1.6-1.3-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.8 1a9.6 9.6 0 0 1 5 0c1.9-1.3 2.8-1 2.8-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.4 4.7-4.6 5 .4.3.7.9.7 1.9V21c0 .3.2.6.7.5A10 10 0 0 0 12 2Z"/></svg></a>
+          </div>
+        </div>
+        <nav aria-labelledby="footer-product"><h2 id="footer-product">Flux Drop</h2><ul><li><a class="landing-link" href="https://runonflux.com/apps/drop">Publish a site</a></li><li><a href="#how-it-works">How it works</a></li><li><a href="#features">Features</a></li><li><a href="/agents">For agents</a></li><li><a href="#faq">FAQ</a></li></ul></nav>
+        <nav aria-labelledby="footer-flux"><h2 id="footer-flux">Flux products</h2><ul><li><a href="https://orbit.runonflux.com" target="_blank" rel="noopener noreferrer">Orbit</a></li><li><a href="https://cloud.runonflux.com/" target="_blank" rel="noopener noreferrer">FluxCloud</a></li><li><a href="https://ai.runonflux.com/" target="_blank" rel="noopener noreferrer">FluxAI</a></li><li><a href="https://console.fluxedge.ai/" target="_blank" rel="noopener noreferrer">FluxEdge</a></li><li><a href="https://cloud.runonflux.com/marketplace/" target="_blank" rel="noopener noreferrer">Marketplace</a></li></ul></nav>
+        <nav aria-labelledby="footer-resources"><h2 id="footer-resources">Resources</h2><ul><li><a href="https://runonflux.com" target="_blank" rel="noopener noreferrer">runonflux.com</a></li><li><a href="https://docs.runonflux.com/" target="_blank" rel="noopener noreferrer">Documentation</a></li><li><a href="https://support.runonflux.io/support/home" target="_blank" rel="noopener noreferrer">Support</a></li><li><a href="https://github.com/runonflux" target="_blank" rel="noopener noreferrer">GitHub</a></li></ul></nav>
+        <nav aria-labelledby="footer-legal"><h2 id="footer-legal">Legal</h2><ul><li><a href="https://runonflux.com/terms-of-service/" target="_blank" rel="noopener noreferrer">Terms of Service</a></li><li><a href="https://runonflux.com/privacy-policy/" target="_blank" rel="noopener noreferrer">Privacy Policy</a></li><li><a href="https://support.runonflux.io/support/home" target="_blank" rel="noopener noreferrer">Report abuse</a></li><li><a href="https://runonflux.com/bug-bounty/" target="_blank" rel="noopener noreferrer">Bug bounty</a></li></ul></nav>
+      </div>
+      <div class="footer-bottom"><span>© <span id="year">2026</span> Flux Drop</span><span>Powered by <a href="https://runonflux.com" target="_blank" rel="noopener noreferrer">Flux</a></span></div>
+    </div>
+  </footer>
+
+  <script>{{.JS}}</script>
+</body>
+</html>

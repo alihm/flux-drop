@@ -48,6 +48,14 @@ func main() {
 	registerWatermarkFixtures(mux)
 	registerAgentFixtures(mux)
 	mux.Handle("/{$}", httpserver.HomePage())
+	// Keep legacy workspace coverage and exercise the actual public renderer on
+	// a test-only route. Production serves LandingPage at /.
+	landing := httpserver.LandingPage()
+	mux.HandleFunc("/landing", func(w http.ResponseWriter, r *http.Request) {
+		copy := r.Clone(r.Context())
+		copy.URL.Path = "/"
+		landing.ServeHTTP(w, copy)
+	})
 	mux.Handle("/unlock/", httpserver.UnlockPage())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
 	mux.HandleFunc("GET /manage", func(w http.ResponseWriter, r *http.Request) {

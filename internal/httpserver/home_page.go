@@ -8,7 +8,7 @@ import (
 	"net/http"
 )
 
-//go:embed ui/home.html ui/home.css ui/home.js ui/auth.bundle.js ui/agents.html
+//go:embed ui/home.html ui/home.css ui/home.js ui/landing.html ui/landing.js ui/auth.bundle.js ui/agents.html
 var homeUI embed.FS
 
 func AgentGuide() http.Handler {
@@ -34,9 +34,23 @@ func HomePage() http.Handler {
 }
 
 func HomePageWithAuth(auth *FirebaseWebConfig) http.Handler {
-	html, _ := homeUI.ReadFile("ui/home.html")
+	return renderHomePage(auth, false)
+}
+
+// LandingPage advertises the hosted workspace without initializing browser
+// sessions, Firebase, uploads or management. The original UI stays embedded.
+func LandingPage() http.Handler {
+	return renderHomePage(nil, true)
+}
+
+func renderHomePage(auth *FirebaseWebConfig, landing bool) http.Handler {
+	templateName, scriptName := "ui/home.html", "ui/home.js"
+	if landing {
+		templateName, scriptName = "ui/landing.html", "ui/landing.js"
+	}
+	html, _ := homeUI.ReadFile(templateName)
 	css, _ := homeUI.ReadFile("ui/home.css")
-	js, _ := homeUI.ReadFile("ui/home.js")
+	js, _ := homeUI.ReadFile(scriptName)
 	if auth != nil {
 		bundle, _ := homeUI.ReadFile("ui/auth.bundle.js")
 		js = append(append(bundle, '\n'), js...)

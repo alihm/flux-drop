@@ -79,6 +79,9 @@ test('Claim it opens sign-in without invoking Google and resumes after sign-in',
   await page.route(`**/api/projects/${id}/claim`,async r=>{expect((await r.request().allHeaders())['x-csrf-token']).toBe('claimed-session');claimed=true;await r.fulfill({json:{project:{id,slug:'claim-demo-abcdef',revision:2}}})});
   await page.goto('/');await page.locator('#files').setInputFiles({name:'index.html',mimeType:'text/html',buffer:Buffer.from('<h1>Claim me</h1>')});await page.getByRole('button',{name:'Publish site'}).click();
   await expect(page.locator('#claim-result')).toHaveText('Claim it');await expect(page.locator('#expiry')).toContainText('Sign in to claim it');await expect(page.locator('#expiry')).not.toContainText('with Google');
+  // The result appears before the post-upload project refresh finishes. Claim
+  // intentionally ignores clicks while uploading; wait for that state to settle.
+  await expect(page.locator('#name')).toBeEnabled();
   await page.locator('#claim-result').click();await expect(page.getByRole('dialog',{name:'Sign in',exact:true})).toBeVisible();expect(await page.evaluate(()=>window.providerCalls)).toBe(0);expect(exchanges).toBe(0);expect(claimed).toBe(false);
   await page.keyboard.press('Escape');await expect(page.getByRole('dialog',{name:'Sign in',exact:true})).toBeHidden();expect(claimed).toBe(false);
   await page.locator('#claim-result').click();await page.getByRole('button',{name:'Continue with Google',exact:true}).click();await expect(page.locator('#claim-callout')).toBeHidden();expect(claimed).toBe(true);expect(exchanges).toBe(1);expect(await page.evaluate(()=>window.providerCalls)).toBe(1);
