@@ -16,7 +16,6 @@ import (
 	"github.com/runonflux/flux-drop/internal/content"
 	"github.com/runonflux/flux-drop/internal/httpcache"
 	"github.com/runonflux/flux-drop/internal/project"
-	"golang.org/x/sys/unix"
 )
 
 type cacheEntry struct {
@@ -30,6 +29,7 @@ type fileCache struct {
 	mu          sync.Mutex
 	root        string
 	limit, used int64
+	maxEntries  int
 	entries     map[string]*cacheEntry
 }
 
@@ -58,7 +58,7 @@ func newFileCache(root string, limit int64) (*fileCache, error) {
 			return nil, err
 		}
 	}
-	return &fileCache{root: root, limit: limit, entries: map[string]*cacheEntry{}}, nil
+	return &fileCache{root: root, limit: limit, entries: map[string]*cacheEntry{}, maxEntries: 4096}, nil
 }
 func (c *fileCache) close() {
 	c.mu.Lock()
@@ -123,7 +123,7 @@ func (c *fileCache) put(key string, f *os.File, entry content.File) func() {
 	if entry.Size > c.limit || c.limit == 0 || c.entries[key] != nil {
 		return temporary
 	}
-	for c.used+entry.Size > c.limit || len(c.entries) >= 4096 {
+	for c.used+entry.Size > c.limit || len(c.entries) >= c.maxEntries {
 		var oldest string
 		for k, e := range c.entries {
 			if e.pins == 0 && (oldest == "" || e.last.Before(c.entries[oldest].last)) {
@@ -186,11 +186,11 @@ func (p *Pool) serve(w http.ResponseWriter, r *http.Request, pr project.Project,
 	}
 	key := cacheKey(pr, name)
 	if f, entry, release, ok := p.cache.get(key); ok {
+		p.fetch.metrics.Hits.Add(1)
 		// get checked the immutable downloaded file's inode, size and mtime.
 		defer release()
-		if !check() {
-			return
-		}
+		// Delivery already authorized this request. A verified immediate cache
+		// hit has no intervening remote work and needs no second lookup.
 		if httpcache.File(w, r, name, entry.SHA256, pr.Private, !pr.WatermarkDisabled) {
 			return
 		}
@@ -198,88 +198,28 @@ func (p *Pool) serve(w http.ResponseWriter, r *http.Request, pr project.Project,
 		return
 	}
 
-	select {
-	case p.downloads <- struct{}{}:
-		defer func() { <-p.downloads }()
-	case <-r.Context().Done():
-		w.WriteHeader(503)
-		return
-	default:
-		w.Header().Set("Retry-After", "5")
-		w.WriteHeader(503)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
-	defer cancel()
-	a := p.app(pr.StorageApp)
-	if a == nil {
-		w.WriteHeader(503)
-		return
-	}
-	for _, node := range a.nodes() {
-		addr, err := netip.ParseAddrPort(node.Address)
-		if err != nil {
-			continue
-		}
-		prefix := apiPrefix + "versions/" + pr.ID + "/" + pr.ActiveDigest
-		if pr.StorageGeneration != "" {
-			if !digestRE.MatchString(pr.StorageGeneration) {
-				w.Header().Set("Retry-After", "5")
-				w.WriteHeader(http.StatusServiceUnavailable)
-				return
-			}
-			prefix = apiPrefix + "generations/" + pr.ID + "/" + pr.StorageGeneration + "/" + pr.ActiveDigest
-		}
-		res, err := a.request(ctx, addr, "GET", prefix+"/manifest", nil, "")
-		if err != nil {
-			continue
-		}
-		data, err := io.ReadAll(io.LimitReader(res.Body, 8<<20+1))
-		status := res.StatusCode
-		res.Body.Close()
-		if err != nil || status != 200 {
-			continue
-		}
-		manifest, err := content.ParseManifest(data, pr.ActiveDigest)
-		if err != nil {
-			continue
-		}
-		var entry content.File
-		found := false
-		for _, item := range manifest.Files {
-			if item.Path == name {
-				entry = item
-				found = true
-				break
-			}
-		}
-		if !found {
+	p.fetch.metrics.Misses.Add(1)
+	f, entry, release, err := p.fetchFile(r.Context(), pr, name)
+	if err != nil {
+		if errors.Is(err, project.ErrNotFound) {
 			http.NotFound(w, r)
-			return
+		} else {
+			w.Header().Set("Retry-After", "5")
+			w.WriteHeader(503)
 		}
-		f, err := p.download(ctx, a, addr, prefix+"/files/"+name, entry)
-		if err != nil {
-			continue
-		}
-		release := p.cache.put(key, f, entry)
-		defer release()
-		if !check() {
-			return
-		}
-		if httpcache.File(w, r, name, entry.SHA256, pr.Private, !pr.WatermarkDisabled) {
-			return
-		}
-		http.ServeContent(w, r, name, time.Time{}, f)
 		return
 	}
-	w.Header().Set("Retry-After", "5")
-	w.WriteHeader(503)
-}
-func (p *Pool) download(ctx context.Context, a *appRuntime, addr netip.AddrPort, path string, entry content.File) (*os.File, error) {
-	var fs unix.Statfs_t
-	if unix.Statfs(p.cache.root, &fs) != nil || fs.Bsize <= 0 || fs.Bavail < uint64((Headroom+4*(200<<20))/fs.Bsize) || fs.Files != 0 && fs.Ffree < 1024 {
-		return nil, errFull
+	defer release()
+	if !check() {
+		return
 	}
+	if httpcache.File(w, r, name, entry.SHA256, pr.Private, !pr.WatermarkDisabled) {
+		return
+	}
+	http.ServeContent(w, r, name, time.Time{}, f)
+}
+
+func (p *Pool) download(ctx context.Context, a *appRuntime, addr netip.AddrPort, path string, entry content.File) (*os.File, error) {
 	res, err := a.request(ctx, addr, "GET", path, nil, "")
 	if err != nil {
 		return nil, err

@@ -43,6 +43,7 @@ type appRuntime struct {
 	client    *http.Client
 	mu        sync.RWMutex
 	health    map[netip.AddrPort]NodeHealth
+	loads     map[netip.AddrPort]int
 }
 type Pool struct {
 	store     *metadata.Store
@@ -51,18 +52,30 @@ type Pool struct {
 	cache     *fileCache
 	downloads chan struct{}
 	probes    chan struct{}
+	fetch     *fetchState
 }
 
 func NewPool(c Config, cacheRoot string) (*Pool, error) {
 	if c.Role != "primary" {
 		return nil, errors.New("primary role required")
 	}
-	p := &Pool{config: c, downloads: make(chan struct{}, 4), probes: make(chan struct{}, 8)}
+	if c.FetchConcurrency == 0 {
+		c.FetchConcurrency = 32
+		c.FetchQueue = 1024
+	}
+	if c.FetchBytes == 0 {
+		c.FetchBytes = 800 << 20
+	}
+	if c.CacheEntries == 0 {
+		c.CacheEntries = 4096
+	}
+	p := &Pool{config: c, downloads: make(chan struct{}, c.FetchConcurrency), probes: make(chan struct{}, 8), fetch: newFetchState(c)}
 	cache, err := newFileCache(cacheRoot, c.CacheBytes)
 	if err != nil {
 		return nil, err
 	}
 	p.cache = cache
+	p.cache.maxEntries = c.CacheEntries
 	for _, app := range c.Apps {
 		tlsConfig, err := clientTLS(app, c.AppName)
 		if err != nil {
@@ -74,13 +87,20 @@ func NewPool(c Config, cacheRoot string) (*Pool, error) {
 			p.Close()
 			return nil, err
 		}
-		transport := &http.Transport{Proxy: nil, TLSClientConfig: tlsConfig, DialContext: (&net.Dialer{Timeout: 3 * time.Second, KeepAlive: 30 * time.Second}).DialContext, MaxConnsPerHost: 4, MaxIdleConns: 64, MaxIdleConnsPerHost: 2, IdleConnTimeout: 30 * time.Second, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 15 * time.Second, MaxResponseHeaderBytes: 16 << 10, DisableCompression: true}
+		transport := &http.Transport{Proxy: nil, TLSClientConfig: tlsConfig, DialContext: (&net.Dialer{Timeout: 3 * time.Second, KeepAlive: 30 * time.Second}).DialContext, MaxConnsPerHost: c.FetchConcurrency, MaxIdleConns: c.FetchConcurrency * len(c.Apps), MaxIdleConnsPerHost: c.FetchConcurrency, IdleConnTimeout: 30 * time.Second, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 15 * time.Second, MaxResponseHeaderBytes: 16 << 10, DisableCompression: true}
 		client := &http.Client{Transport: transport, Timeout: 5 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("storage redirects forbidden") }}
 		p.apps = append(p.apps, &appRuntime{config: app, discovery: d, client: client, health: map[netip.AddrPort]NodeHealth{}})
 	}
 	return p, nil
 }
 func (p *Pool) Close() {
+	if p.fetch != nil {
+		p.fetch.mu.Lock()
+		p.fetch.closed = true
+		p.fetch.mu.Unlock()
+		p.fetch.cancel()
+		p.fetch.wg.Wait()
+	}
 	for _, a := range p.apps {
 		a.client.CloseIdleConnections()
 	}
@@ -275,7 +295,27 @@ func (a *appRuntime) request(ctx context.Context, addr netip.AddrPort, method, p
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	return a.client.Do(req)
+	a.mu.Lock()
+	if a.loads == nil {
+		a.loads = map[netip.AddrPort]int{}
+	}
+	a.loads[addr]++
+	a.mu.Unlock()
+	release := func() {
+		a.mu.Lock()
+		a.loads[addr]--
+		if a.loads[addr] == 0 {
+			delete(a.loads, addr)
+		}
+		a.mu.Unlock()
+	}
+	res, err := a.client.Do(req)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	res.Body = &loadedBody{ReadCloser: res.Body, release: release}
+	return res, nil
 }
 func readResponse(res *http.Response, value any, limit int64) error {
 	if res.StatusCode != 200 {
@@ -443,3 +483,11 @@ func (p *Pool) appStatuses() []appStatus {
 	}
 	return result
 }
+
+type loadedBody struct {
+	io.ReadCloser
+	once    sync.Once
+	release func()
+}
+
+func (b *loadedBody) Close() error { err := b.ReadCloser.Close(); b.once.Do(b.release); return err }

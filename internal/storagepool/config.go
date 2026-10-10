@@ -38,6 +38,8 @@ type Config struct {
 	Keys                                           map[string]string
 	Port                                           uint16
 	Capacity, CacheBytes                           int64
+	FetchConcurrency, FetchQueue, CacheEntries     int
+	FetchBytes                                     int64
 	AdminKey                                       string
 	Reclamation                                    bool
 	SyncthingURL, SyncthingAPIKey, SyncthingFolder string
@@ -59,7 +61,30 @@ func decode(raw string, value any) error {
 	return nil
 }
 func FromEnv(get func(string) string) (Config, error) {
-	c := Config{Role: get("DROP_ROLE"), AppName: get("FLUX_APP_NAME"), Port: DefaultPort, CacheBytes: 256 << 20, AdminKey: get("DROP_STORAGE_ADMIN_KEY")}
+	c := Config{Role: get("DROP_ROLE"), AppName: get("FLUX_APP_NAME"), Port: DefaultPort, CacheBytes: 256 << 20, FetchConcurrency: 32, FetchQueue: 1024, CacheEntries: 4096, FetchBytes: 800 << 20, AdminKey: get("DROP_STORAGE_ADMIN_KEY")}
+	for key, spec := range map[string]struct {
+		target   *int
+		min, max int
+	}{
+		"DROP_STORAGE_FETCH_CONCURRENCY": {&c.FetchConcurrency, 1, 128},
+		"DROP_STORAGE_FETCH_QUEUE":       {&c.FetchQueue, 0, 8192},
+		"DROP_CACHE_ENTRIES":             {&c.CacheEntries, 1, 65536},
+	} {
+		if raw := get(key); raw != "" {
+			n, err := strconv.ParseInt(raw, 10, 32)
+			if err != nil || n < int64(spec.min) || n > int64(spec.max) {
+				return c, errors.New("invalid " + key)
+			}
+			*spec.target = int(n)
+		}
+	}
+	if raw := get("DROP_STORAGE_FETCH_BYTES"); raw != "" {
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || n < 1<<20 || n > 1<<40 {
+			return c, errors.New("invalid DROP_STORAGE_FETCH_BYTES")
+		}
+		c.FetchBytes = n
+	}
 	if raw := get("DROP_STORAGE_RECLAMATION_ENABLED"); raw != "" {
 		v, err := strconv.ParseBool(raw)
 		if err != nil {
@@ -79,7 +104,7 @@ func FromEnv(get func(string) string) (Config, error) {
 		}
 	}
 	if c.Role == "" {
-		for _, k := range []string{"DROP_STORAGE_APPS_JSON", "DROP_PRIMARY_APP_NAME", "DROP_STORAGE_API_KEYS_JSON", "DROP_STORAGE_CAPACITY_BYTES", "DROP_STORAGE_ADMIN_KEY", "DROP_CACHE_BYTES", "DROP_STORAGE_PORT", "DROP_STORAGE_RECLAMATION_ENABLED", "DROP_STORAGE_SYNCTHING_URL", "DROP_STORAGE_SYNCTHING_API_KEY", "DROP_STORAGE_SYNCTHING_FOLDER"} {
+		for _, k := range []string{"DROP_STORAGE_FETCH_CONCURRENCY", "DROP_STORAGE_FETCH_QUEUE", "DROP_STORAGE_FETCH_BYTES", "DROP_CACHE_ENTRIES", "DROP_STORAGE_APPS_JSON", "DROP_PRIMARY_APP_NAME", "DROP_STORAGE_API_KEYS_JSON", "DROP_STORAGE_CAPACITY_BYTES", "DROP_STORAGE_ADMIN_KEY", "DROP_CACHE_BYTES", "DROP_STORAGE_PORT", "DROP_STORAGE_RECLAMATION_ENABLED", "DROP_STORAGE_SYNCTHING_URL", "DROP_STORAGE_SYNCTHING_API_KEY", "DROP_STORAGE_SYNCTHING_FOLDER"} {
 			if get(k) != "" {
 				return c, errors.New("storage settings require DROP_ROLE")
 			}

@@ -277,3 +277,27 @@ Syncthing deployment. Live acceptance must verify private env delivery,
 node-local volume exclusion/persistence, HTTPS/direct port mappings, NAT/egress
 source IPs, discovery changes, actual Syncthing propagation, and node loss before
 and after propagation. No production deployment is performed by these checks.
+
+### Bounded serving fetches
+
+Primary reads share verified downloads by app/project/digest/path and parsed
+manifests by app/project/digest (256 entries, approximately 64 MiB). Each reader
+opens its own descriptor. A disconnected initiating reader does not cancel its
+peers; shared work has a two-minute deadline and is canceled at pool shutdown.
+Fetching has a separate budget from the ten-second metadata lookup.
+
+Optional primary settings: `DROP_STORAGE_FETCH_CONCURRENCY=32` (1–128),
+`DROP_STORAGE_FETCH_QUEUE=1024` (0–8192), `DROP_STORAGE_FETCH_BYTES=838860800`
+(1 MiB–1 TiB), `DROP_CACHE_ENTRIES=4096` (1–65536). Queue zero admits no extra
+waiting readers. Distinct fetches wait at most 20 seconds for a slot. Duplicate
+readers also consume bounded admission; slow readers release the fetch slot but
+retain their file reference. Admission failures return 503 and Retry-After.
+
+The byte limit covers block-rounded active spools, including uncached responses
+when `DROP_CACHE_BYTES=0`. Disk admission subtracts outstanding reservations from
+statfs available bytes and leaves 1 GiB/1024 inode headroom; this deliberately
+counts partially materialized reservations conservatively. Retained cache bytes
+remain subject to the separate cache limit. Manifest/hash failures try another
+healthy replica, never another content digest. Read ordering uses shuffled,
+least-loaded replicas; body close releases transport load. Install ordering still
+uses free space. TLS pinning, discovery and no-proxy/no-redirect rules are unchanged.

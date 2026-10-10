@@ -69,7 +69,6 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
-		r = r.WithContext(ctx)
 		p, err := measure(r, "metadata", func() (project.Project, error) { return repository.Resolve(ctx, slug) })
 		if err != nil {
 			if errors.Is(err, project.ErrNotFound) {
@@ -151,9 +150,11 @@ func ProjectDeliveryWithAccess(repository projectResolver, dataRoot string, fall
 		}
 		// Integrity is cached; the project authorization above is never cached.
 		manifest, err := measure(r, "verify", func() (content.Manifest, error) {
-			return content.ServingVersions.VerifyContext(ctx, filepath.Join(dataRoot, "projects", p.ID, "versions", p.ActiveDigest), p.ActiveDigest, file)
+			verifyCtx, verifyCancel := context.WithTimeout(r.Context(), 2*time.Minute)
+			defer verifyCancel()
+			return content.ServingVersions.VerifyContext(verifyCtx, filepath.Join(dataRoot, "projects", p.ID, "versions", p.ActiveDigest), p.ActiveDigest, file)
 		})
-		if ctx.Err() != nil {
+		if r.Context().Err() != nil {
 			w.WriteHeader(503)
 			return
 		}
