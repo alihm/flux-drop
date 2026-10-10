@@ -37,6 +37,9 @@ func TestRuntimeSizingAndMemorySplit(t *testing.T) {
 	if e != nil || connections >= 1024 {
 		t.Fatal(connections, e)
 	}
+	if _, connections, e := nginxSizing(1, 1, 256); e != nil || connections < 1 {
+		t.Fatal("boundary nofile", connections, e)
+	}
 	if _, _, e = nginxSizing(4, 4, 128); e == nil {
 		t.Fatal("unusable inherited nofile")
 	}

@@ -153,6 +153,9 @@ func nginxSizing(affinity int, quota float64, soft uint64) (int, int, error) {
 	connections := 8192
 	if soft < 16640 {
 		connections = int(soft/2) - 128
+		if connections < 64 {
+			connections = 64
+		}
 	}
 	return workers, connections, nil
 }
