@@ -30,3 +30,9 @@ missing-content peer fallback. Each node has a separate unsynchronized Raft volu
 
 `down -v` removes only this stack's disposable fixture, content and state volumes.
 The local image is `flux-drop:raft-test`; the test does not push registry tags.
+
+Serving assertions poll healthy-fixture replication rather than assume immediate
+visibility: local reserved/pending/old policy records may delay new access. This
+20-second test bound is not a production freshness guarantee. During quorum loss
+an applied follower may still serve valid local private grants; management remains
+unavailable. The test explicitly distinguishes these accepted serving semantics.

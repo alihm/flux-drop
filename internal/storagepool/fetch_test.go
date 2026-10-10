@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/runonflux/flux-drop/internal/content"
+	"github.com/runonflux/flux-drop/internal/project"
 )
 
 func TestColdBurstSharesVerifiedFilesAndManifest(t *testing.T) {
@@ -239,5 +240,77 @@ func TestSlowResponseDoesNotHoldFetchSlotAndOwnsTemporaryBytes(t *testing.T) {
 	defer p.fetch.mu.Unlock()
 	if p.fetch.spoolBytes != 0 {
 		t.Fatal("temporary accounting leaked")
+	}
+}
+
+func TestFetchQueueFullReturnsRetryable503(t *testing.T) {
+	_, _, p := fixture(t, t.TempDir(), nil)
+	// A zero-queue runtime has only the active-worker reader allowance. Filling
+	// it models occupied workers and ensures duplicate callers cannot bypass it.
+	p.fetch.callers = make(chan struct{}, cap(p.downloads))
+	for i := 0; i < cap(p.fetch.callers); i++ {
+		p.fetch.callers <- struct{}{}
+	}
+	staged := stagedHTML(t, "queue full")
+	pr := prepared(staged)
+	rec := httptest.NewRecorder()
+	p.ServeProject(rec, httptest.NewRequest("GET", "/", nil), pr.Project, "index.html")
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" || p.fetch.metrics.QueueFull.Load() != 1 {
+		t.Fatal(rec.Code, rec.Header(), p.fetch.metrics.QueueFull.Load())
+	}
+	for len(p.fetch.callers) > 0 {
+		<-p.fetch.callers
+	}
+}
+
+func TestSharedFetchChecksEveryCallersPolicy(t *testing.T) {
+	entered, proceed := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	_, _, p := fixture(t, t.TempDir(), func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.URL.Path, "/files/") {
+				once.Do(func() { close(entered) })
+				<-proceed
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+	staged := stagedHTML(t, "shared bytes, individual policy")
+	pr := prepared(staged)
+	if e := p.Install(context.Background(), pr, staged); e != nil {
+		t.Fatal(e)
+	}
+	var calls atomic.Int64
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rec := httptest.NewRecorder()
+			p.ServeAuthorizedProject(rec, httptest.NewRequest("GET", "/", nil), pr.Project, "index.html", func(context.Context) error {
+				calls.Add(1)
+				if i == 0 {
+					return project.ErrNotFound
+				}
+				return nil
+			})
+			want := 200
+			if i == 0 {
+				want = 404
+			}
+			if rec.Code != want {
+				t.Errorf("caller %d: %d, want %d", i, rec.Code, want)
+			}
+		}(i)
+	}
+	<-entered
+	deadline := time.Now().Add(5 * time.Second)
+	for p.fetch.metrics.Shared.Load() < 9 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	close(proceed)
+	wg.Wait()
+	if calls.Load() != 10 {
+		t.Fatal("shared authorization decision", calls.Load())
 	}
 }
