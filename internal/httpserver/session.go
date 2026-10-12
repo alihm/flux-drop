@@ -188,7 +188,7 @@ func setSessionCookie(w http.ResponseWriter, token string, expires time.Time) {
 func sessionResponse(w http.ResponseWriter, view session.View) {
 	result := map[string]any{"csrfToken": view.Record.CSRF, "authenticated": view.Authenticated,
 		"reauthenticationRequired": view.Record.UID != "" && !view.Authenticated, "expiresAt": view.Record.ExpiresAt}
-	if view.Authenticated {
+	if view.Record.UID != "" {
 		result["user"] = map[string]string{"uid": view.Record.UID}
 		result["authExpiresAt"] = view.Record.AuthUntil
 	}
@@ -198,6 +198,8 @@ func sessionResponse(w http.ResponseWriter, view session.View) {
 func sessionError(w http.ResponseWriter, err error) {
 	code, message := http.StatusServiceUnavailable, "authentication_unavailable"
 	switch {
+	case errors.Is(err, session.ErrReauthentication):
+		code, message = 401, "reauthentication_required"
 	case errors.Is(err, session.ErrUnauthorized):
 		code, message = 401, "authentication_required"
 	case errors.Is(err, session.ErrCSRF):

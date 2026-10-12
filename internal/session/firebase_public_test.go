@@ -41,7 +41,7 @@ func TestPublicVerifierClaimsAndSessionExpiry(t *testing.T) {
 	token := valid()
 	v := &PublicFirebaseVerifier{verify: func(context.Context, string) (*auth.Token, error) { return token, nil }, now: func() time.Time { return now }}
 	identity, err := v.VerifyGoogle(context.Background(), "verified-by-sdk")
-	if err != nil || !identity.ExpiresAt.Equal(now.Add(time.Hour)) {
+	if err != nil || !identity.ExpiresAt.Equal(now.Add(time.Hour)) || !identity.IssuedAt.Equal(now) {
 		t.Fatal(identity, err)
 	}
 	for _, change := range []func(*auth.Token){
@@ -76,6 +76,14 @@ func TestPublicVerifierClaimsAndSessionExpiry(t *testing.T) {
 	now = now.Add(time.Hour)
 	if read, err := s.Read(context.Background(), cookie); err != nil || read.Authenticated {
 		t.Fatal("expired identity still authenticated", read, err)
+	}
+	// Renewal through the real public verifier must propagate iat, preserving
+	// the original auth_time and bounding the new session by the new exp.
+	token.IssuedAt = now.Unix()
+	token.Expires = now.Add(time.Hour).Unix()
+	newCookie, renewed, err := s.Login(context.Background(), cookie, view.Record.CSRF, "verified-by-sdk")
+	if err != nil || newCookie == cookie || !renewed.Record.AuthUntil.Equal(now.Add(time.Hour)) || !renewed.Record.AuthTime.Equal(view.Record.AuthTime) {
+		t.Fatal("public verifier renewal failed", renewed, err)
 	}
 	if err := v.CheckAccount(context.Background(), identity); !errors.Is(err, ErrUnauthorized) {
 		t.Fatal("expired account check accepted", err)

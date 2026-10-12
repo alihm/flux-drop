@@ -58,7 +58,7 @@ func (v *PublicFirebaseVerifier) VerifyGoogle(ctx context.Context, raw string) (
 	if token == nil || token.UID == "" || token.Firebase.SignInProvider != "google.com" || token.Firebase.Tenant != "" || token.Claims["email_verified"] != true || token.AuthTime <= 0 || token.Expires <= now.Unix() || token.IssuedAt > now.Unix()+60 || token.AuthTime > now.Unix()+60 || token.Expires > now.Add(time.Hour+time.Minute).Unix() {
 		return Identity{}, ErrUnauthorized
 	}
-	return Identity{UID: token.UID, AuthTime: time.Unix(token.AuthTime, 0).UTC(), ExpiresAt: time.Unix(token.Expires, 0).UTC()}, nil
+	return Identity{UID: token.UID, IssuedAt: time.Unix(token.IssuedAt, 0).UTC(), AuthTime: time.Unix(token.AuthTime, 0).UTC(), ExpiresAt: time.Unix(token.Expires, 0).UTC()}, nil
 }
 
 // CheckAccount implements ONLY the local bounded-session policy. It is not an

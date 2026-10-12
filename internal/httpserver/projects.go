@@ -49,6 +49,11 @@ func registerProjects(mux *http.ServeMux, config Config, deps Dependencies, hash
 		if err != nil {
 			return project.Actor{}, err
 		}
+		// A lapsed linked session must renew, not silently become an anonymous
+		// actor (which would hide account projects and change upload ownership).
+		if view.Record.UID != "" && !view.Authenticated {
+			return project.Actor{}, session.ErrReauthentication
+		}
 		if mutation {
 			_, csrf, err := mutationCredentials(r)
 			if err != nil {

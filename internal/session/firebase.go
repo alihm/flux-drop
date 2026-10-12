@@ -20,7 +20,7 @@ func (v *FirebaseVerifier) VerifyGoogle(ctx context.Context, raw string) (Identi
 	if token.Firebase.SignInProvider != "google.com" {
 		return Identity{}, ErrUnauthorized
 	}
-	return Identity{UID: token.UID, AuthTime: time.Unix(token.AuthTime, 0).UTC()}, nil
+	return Identity{UID: token.UID, IssuedAt: time.Unix(token.IssuedAt, 0).UTC(), AuthTime: time.Unix(token.AuthTime, 0).UTC(), ExpiresAt: time.Unix(token.Expires, 0).UTC()}, nil
 }
 
 func (v *FirebaseVerifier) CheckAccount(ctx context.Context, identity Identity) error {

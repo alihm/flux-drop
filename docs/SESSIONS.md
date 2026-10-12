@@ -38,11 +38,23 @@ a `demo-` project ID, and both emulator endpoints before enabling them.
 - Anonymous record lifetime: 365 days. Cookie persistence is best-effort; users
   and browsers may delete it earlier. This increment does not implement rolling
   renewal on ordinary visits; login/logout create a fresh lifetime.
-- Account authority: 12 hours, with Firebase disabled/revoked-user checks on
-  authenticated session reads. The long-lived cookie alone does not extend it.
-- Login requires Firebase `auth_time` within five minutes (one minute future
-  skew allowed). After account expiry, the UI must perform a new Google sign-in,
-  not just refresh an old ID token.
+- Account authority: at most 12 hours, bounded by the verified Firebase token's
+  expiry, with the configured verifier's account checks on login and authenticated
+  reads. The long-lived cookie alone does not extend account authority.
+- First linking an anonymous session requires Firebase `auth_time` within five
+  minutes (one minute future skew allowed). Renewing an already-linked session
+  for the same UID instead requires `iat` within five minutes, so a silently
+  refreshed Google ID token works even after account authority has lapsed.
+  Renewal rotates the session cookie and CSRF token and preserves anonymous
+  ownership; `auth_time` remains the original sign-in time for revocation checks.
+- Owner project APIs return 401 `reauthentication_required` for a linked session
+  whose account authority has lapsed, rather than falling back to anonymous
+  ownership. Anonymous-only sessions continue working as before. `/api/session`
+  returns `authenticated: false`, `reauthenticationRequired: true`, and
+  `user: {"uid": "..."}` (plus `authExpiresAt`) for lapsed linked sessions.
+  Clients can renew with `POST /api/auth/google`, using their existing session
+  cookie and CSRF token and a freshly issued Google ID token. This enables silent
+  renewal; clients must retain a Firebase session to obtain that token.
 - Login preserves the anonymous ownership ID so those projects can be claimed.
   It does not claim projects automatically; that transaction is a later stage.
 - Switching Firebase accounts requires logout. Logout creates a different

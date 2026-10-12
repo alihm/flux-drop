@@ -228,3 +228,76 @@ func TestDigestAndEnvironmentGuards(t *testing.T) {
 		}
 	}
 }
+
+// A refreshed Firebase token retains auth_time but carries a new iat and exp.
+type renewalVerifier struct {
+	identity Identity
+	err      error
+	checked  bool
+}
+
+func (v *renewalVerifier) VerifyGoogle(context.Context, string) (Identity, error) {
+	return v.identity, nil
+}
+func (v *renewalVerifier) CheckAccount(context.Context, Identity) error {
+	v.checked = true
+	return v.err
+}
+
+func TestSameAccountRenewal(t *testing.T) {
+	for _, tc := range []struct {
+		name                       string
+		uid                        string
+		issuedOffset, expiryOffset time.Duration
+		checkErr, want             error
+	}{
+		{name: "fresh", uid: "alice", expiryOffset: time.Hour},
+		{name: "different account", uid: "bob", expiryOffset: time.Hour, want: ErrAccountSwitch},
+		{name: "expired", uid: "alice", want: ErrUnauthorized},
+		{name: "stale issuance", uid: "alice", issuedOffset: -6 * time.Minute, expiryOffset: time.Hour, want: ErrUnauthorized},
+		{name: "future issuance", uid: "alice", issuedOffset: 2 * time.Minute, expiryOffset: time.Hour, want: ErrUnauthorized},
+		{name: "revoked account", uid: "alice", expiryOffset: time.Hour, checkErr: ErrUnauthorized, want: ErrUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, original := testService()
+			ctx := context.Background()
+			raw, anon, _ := s.Create(ctx)
+			cookie, account, err := s.Login(ctx, raw, anon.Record.CSRF, "alice")
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := original.now.Add(AccountLifetime)
+			s.Now = func() time.Time { return now }
+			verifier := &renewalVerifier{identity: Identity{UID: tc.uid, AuthTime: original.now, IssuedAt: now.Add(tc.issuedOffset), ExpiresAt: now.Add(tc.expiryOffset)}, err: tc.checkErr}
+			s.Verifier = verifier
+			next, view, err := s.Login(ctx, cookie, account.Record.CSRF, "refreshed")
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("got %v want %v", err, tc.want)
+			}
+			if tc.want != nil {
+				if _, err := s.Read(ctx, cookie); err != nil {
+					t.Fatal("failed renewal destroyed session", err)
+				}
+				return
+			}
+			if !verifier.checked || !view.Authenticated || next == cookie || view.Record.CSRF == account.Record.CSRF || view.Record.AnonymousOwner != anon.Record.AnonymousOwner || view.Record.UID != "alice" || !view.Record.AuthUntil.Equal(verifier.identity.ExpiresAt) || !view.Record.AuthTime.Equal(original.now) {
+				t.Fatalf("invalid renewal: %+v", view)
+			}
+			if _, err := s.Read(ctx, cookie); !errors.Is(err, ErrUnauthorized) {
+				t.Fatal("old session survives renewal")
+			}
+			if _, err := s.Read(ctx, next); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestFirstLinkRejectsRefreshedOldSignIn(t *testing.T) {
+	s, _, v := testService()
+	s.Verifier = &renewalVerifier{identity: Identity{UID: "alice", AuthTime: v.now.Add(-time.Hour), IssuedAt: v.now, ExpiresAt: v.now.Add(time.Hour)}}
+	raw, anon, _ := s.Create(context.Background())
+	if _, _, err := s.Login(context.Background(), raw, anon.Record.CSRF, "refreshed"); !errors.Is(err, ErrUnauthorized) {
+		t.Fatal("old sign-in linked anonymous projects", err)
+	}
+}

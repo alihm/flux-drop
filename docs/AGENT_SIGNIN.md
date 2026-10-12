@@ -48,9 +48,10 @@ The existing `GET /api/config` adds `agentAuthEnabled: boolean`.
    token**, never an agent token, on the website's upstream MCP request.
 7. The website's MCP tools use that live Firebase ID token with the Firebase
    bearer project API below. Do not call `/api/auth/google` to open a browser
-   session: refreshed tokens retain their original `auth_time`, while browser
-   login deliberately requires a recent sign-in. Website pages also manage
-   connections and create upload links with their own live Firebase ID token.
+   session: first linking a browser session requires a recent sign-in. Existing
+   same-account browser sessions can renew using a freshly issued token. Website
+   pages also manage connections and create upload links with their own live
+   Firebase ID token.
    No website secret or shared website storage is needed.
 
 The website must distinguish its accepted Firebase JWTs from Drop's opaque
@@ -365,8 +366,9 @@ against Google's securetoken JWKS, issuer
 expiry, `iat` no later than the current time, verified email, absence of a tenant,
 and provider `google.com`. A custom deployment uses its existing
 `FIREBASE_PROJECT_ID` instead. A live refreshed token can have an arbitrarily old
-`auth_time`; no recent sign-in is required. Browser login's five-minute recency
-requirement remains unchanged.
+`auth_time`; no recent sign-in is required. First linking a browser session still
+requires a sign-in within five minutes; same-account browser renewal instead
+checks that the token was issued within five minutes.
 
 The actor is the Firebase UID, with access only to that account's owned projects,
 including projects created through browser sessions, API keys and upload links.

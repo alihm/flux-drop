@@ -38,7 +38,7 @@ func (v projectSessionVerifier) VerifyGoogle(ctx context.Context, raw string) (s
 	if _, _, err := new(jwt.Parser).ParseUnverified(raw, claims); err != nil {
 		return session.Identity{}, err
 	}
-	return session.Identity{UID: identity.UID, AuthTime: time.Unix(int64(claims["auth_time"].(float64)), 0), ExpiresAt: identity.ExpiresAt}, nil
+	return session.Identity{UID: identity.UID, IssuedAt: time.Unix(int64(claims["iat"].(float64)), 0), AuthTime: time.Unix(int64(claims["auth_time"].(float64)), 0), ExpiresAt: identity.ExpiresAt}, nil
 }
 func (v projectSessionVerifier) CheckAccount(context.Context, session.Identity) error { return nil }
 
@@ -399,5 +399,77 @@ func TestFirebaseProjectUploadRetryAndOptionalKey(t *testing.T) {
 	for _, keys := range [][]string{{""}, {"short"}, {"valid-key-one", "valid-key-two"}} {
 		w = h.projectRequest("POST", "/api/agent/projects?name=invalid-key", "<h1>Invalid key</h1>", "text/html", token, 0, http.Header{"Idempotency-Key": keys})
 		projectStatus(t, w, 400, "invalid_project")
+	}
+}
+
+func TestBrowserOwnerSessionLapseAndRenewal(t *testing.T) {
+	h := firebaseProjectHarness(t, false)
+	origin := h.auth.Origin
+	request := func(method, path, body, media string, cookie *http.Cookie, csrf string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Origin", origin)
+		r.Header.Set("Content-Type", media)
+		r.Header.Set("X-CSRF-Token", csrf)
+		r.Header.Set("If-Match", `"1"`)
+		r.Header.Set("Idempotency-Key", "session-renewal-upload")
+		if cookie != nil {
+			r.AddCookie(cookie)
+		}
+		w := httptest.NewRecorder()
+		h.handler.ServeHTTP(w, r)
+		return w
+	}
+	boot := request("POST", "/api/session", "", "", nil, "")
+	projectStatus(t, boot, 200, "")
+	cookie := boot.Result().Cookies()[0]
+	csrf := oauthDecode[map[string]any](t, boot)["csrfToken"].(string)
+	published := request("POST", "/api/projects?name=anonymous-renewal", "<h1>Anonymous</h1>", "text/html", cookie, csrf)
+	projectStatus(t, published, 200, "")
+	p := oauthDecode[bearerProjectResult](t, published).Project
+	list := request("GET", "/api/projects", "", "", cookie, "")
+	projectStatus(t, list, 200, "")
+	if !strings.Contains(list.Body.String(), p.ID) {
+		t.Fatal("anonymous owner lost project", list.Body.String())
+	}
+
+	initialTime := h.clock.Load()
+	token := h.projectToken("alice", "google.com", func(c jwt.MapClaims) { c["auth_time"] = initialTime })
+	login := request("POST", "/api/auth/google", `{"idToken":"`+token+`"}`, "application/json", cookie, csrf)
+	projectStatus(t, login, 200, "")
+	cookie = login.Result().Cookies()[0]
+	csrf = oauthDecode[map[string]any](t, login)["csrfToken"].(string)
+	h.clock.Add(3601)
+	view := request("GET", "/api/session", "", "", cookie, "")
+	projectStatus(t, view, 200, "")
+	data := oauthDecode[map[string]any](t, view)
+	if data["authenticated"] != false || data["reauthenticationRequired"] != true || data["user"].(map[string]any)["uid"] != "alice" {
+		t.Fatal(data)
+	}
+	for _, endpoint := range []struct{ method, suffix string }{
+		{"GET", ""}, {"GET", "/" + p.ID}, {"POST", "/" + p.ID + "/claim"},
+		{"GET", "/" + p.ID + "/versions"}, {"POST", "/" + p.ID + "/versions"},
+		{"POST", "/" + p.ID + "/versions/version/activate"}, {"DELETE", "/" + p.ID + "/versions/version"},
+		{"PUT", "/" + p.ID + "/privacy"}, {"PUT", "/" + p.ID + "/watermark"},
+		{"PATCH", "/" + p.ID}, {"DELETE", "/" + p.ID}, {"GET", "/" + p.ID + "/analytics"},
+	} {
+		t.Run(endpoint.method+endpoint.suffix, func(t *testing.T) {
+			w := request(endpoint.method, "/api/projects"+endpoint.suffix, `{}`, "application/json", cookie, csrf)
+			projectStatus(t, w, 401, "reauthentication_required")
+		})
+	}
+	other := h.projectToken("bob", "google.com", nil)
+	projectStatus(t, request("POST", "/api/auth/google", `{"idToken":"`+other+`"}`, "application/json", cookie, csrf), 409, "logout_required")
+	refreshed := h.projectToken("alice", "google.com", func(c jwt.MapClaims) { c["auth_time"] = initialTime })
+	renewed := request("POST", "/api/auth/google", `{"idToken":"`+refreshed+`"}`, "application/json", cookie, csrf)
+	projectStatus(t, renewed, 200, "")
+	newCookie := renewed.Result().Cookies()[0]
+	newCSRF := oauthDecode[map[string]any](t, renewed)["csrfToken"].(string)
+	if cookie.Value == newCookie.Value || csrf == newCSRF {
+		t.Fatal("renewal did not rotate credentials")
+	}
+	list = request("GET", "/api/projects", "", "", newCookie, "")
+	projectStatus(t, list, 200, "")
+	if !strings.Contains(list.Body.String(), p.ID) {
+		t.Fatal("renewal lost anonymous ownership", list.Body.String())
 	}
 }

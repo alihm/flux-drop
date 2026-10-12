@@ -14,10 +14,11 @@ import (
 )
 
 var (
-	ErrUnauthorized  = errors.New("invalid or expired session")
-	ErrCSRF          = errors.New("invalid csrf token")
-	ErrAccountSwitch = errors.New("logout required before switching accounts")
-	ErrRateLimited   = errors.New("session creation rate limit exceeded")
+	ErrReauthentication = errors.New("account session requires renewal")
+	ErrUnauthorized     = errors.New("invalid or expired session")
+	ErrCSRF             = errors.New("invalid csrf token")
+	ErrAccountSwitch    = errors.New("logout required before switching accounts")
+	ErrRateLimited      = errors.New("session creation rate limit exceeded")
 )
 
 const AnonymousLifetime = 365 * 24 * time.Hour
@@ -42,6 +43,7 @@ func (r Record) Active(now time.Time) bool {
 
 type Identity struct {
 	UID      string
+	IssuedAt time.Time
 	AuthTime time.Time
 	// ExpiresAt bounds sessions created by credential-free token verification.
 	// Zero is allowed only for legacy verifiers with live account checks.
@@ -180,7 +182,7 @@ func (s *Service) Login(ctx context.Context, token, csrf, idToken string) (strin
 		return "", View{}, err
 	}
 	now := s.now()
-	if identity.UID == "" || identity.AuthTime.After(now.Add(time.Minute)) || now.Sub(identity.AuthTime) > 5*time.Minute {
+	if identity.UID == "" || identity.AuthTime.IsZero() || identity.AuthTime.After(now.Add(time.Minute)) {
 		return "", View{}, ErrUnauthorized
 	}
 	if !identity.ExpiresAt.IsZero() && !now.Before(identity.ExpiresAt) {
@@ -188,6 +190,22 @@ func (s *Service) Login(ctx context.Context, token, csrf, idToken string) (strin
 	}
 	if old.UID != "" && old.UID != identity.UID {
 		return "", View{}, ErrAccountSwitch
+	}
+	if old.UID == "" {
+		// Linking anonymous ownership to an account requires a recent sign-in.
+		if now.Sub(identity.AuthTime) > 5*time.Minute {
+			return "", View{}, ErrUnauthorized
+		}
+	} else {
+		// Renewal retains the same account and anonymous owner. Firebase keeps
+		// auth_time from the original sign-in, so require a freshly issued token
+		// instead; retain auth_time for account revocation checks.
+		if identity.IssuedAt.IsZero() || identity.IssuedAt.After(now.Add(time.Minute)) || now.Sub(identity.IssuedAt) > 5*time.Minute {
+			return "", View{}, ErrUnauthorized
+		}
+	}
+	if err := s.Verifier.CheckAccount(ctx, identity); err != nil {
+		return "", View{}, err
 	}
 	newToken, next, err := fresh(now)
 	if err != nil {
