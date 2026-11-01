@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -133,7 +134,7 @@ func (o *Observer) probe(ctx context.Context, address netip.AddrPort) (Observati
 		return Observation{}, err
 	}
 	var status Status
-	if len(body) > 16<<10 || decodeStrict(body, &status) != nil || status.ClusterID != o.clusterID || status.ID != replica.PeerIdentity(response.TLS.PeerCertificates[0], o.app) || status.ID == "" || status.UptimeSeconds < 0 || status.QuorumVerified || status.AppliedIndex > status.LastIndex || status.StateIndex > status.AppliedIndex {
+	if len(body) > 16<<10 || decodePeerJSON(body, &status) != nil || status.ClusterID != o.clusterID || status.ID != replica.PeerIdentity(response.TLS.PeerCertificates[0], o.app) || status.ID == "" || status.UptimeSeconds < 0 || status.QuorumVerified || status.AppliedIndex > status.LastIndex || status.StateIndex > status.AppliedIndex {
 		return Observation{}, errors.New("invalid peer status")
 	}
 	switch status.Role {
@@ -224,4 +225,17 @@ func (o *Observer) Run(ctx context.Context) {
 		case <-timer.C:
 		}
 	}
+}
+
+// Peer observations are forward compatible; unlike command/state decoders,
+// they ignore extensions but still require one complete JSON document.
+func decodePeerJSON(data []byte, into any) error {
+	d := json.NewDecoder(bytes.NewReader(data))
+	if err := d.Decode(into); err != nil {
+		return err
+	}
+	if err := d.Decode(new(any)); err != io.EOF {
+		return ErrInvalid
+	}
+	return nil
 }
