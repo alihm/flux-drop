@@ -56,6 +56,7 @@ func (e *enrollment) adjustTarget(floor, voters, eligible int) int {
 
 func (e *enrollment) probeMembers(ctx context.Context, configuration raft.Configuration) map[string]bool {
 	healthy := map[string]bool{e.node.config.Local.ID: true}
+	keys := map[string]string{e.node.config.Local.ID: e.localKeyHash}
 	var mu sync.Mutex
 	var workers sync.WaitGroup
 	slots := make(chan struct{}, 4)
@@ -81,11 +82,13 @@ func (e *enrollment) probeMembers(ctx context.Context, configuration raft.Config
 			if err == nil && p.Status.ID == m.ID && (p.Status.Role == "Follower" || p.Status.Role == "Leader") {
 				mu.Lock()
 				healthy[m.ID] = true
+				keys[m.ID] = p.keyHash
 				mu.Unlock()
 			}
 		}(server)
 	}
 	workers.Wait()
+	e.memberKeys = keys
 	return healthy
 }
 

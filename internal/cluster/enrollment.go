@@ -42,6 +42,8 @@ type membershipPolicy struct {
 // private shared admission credential. The credential never replaces TLS trust
 // or bootstraps a voting configuration from discovery.
 type enrollment struct {
+	localKeyHash      string
+	memberKeys        map[string]string
 	node              *Node
 	observer          *Observer
 	credential        [32]byte
@@ -131,7 +133,12 @@ func newEnrollment(n *Node, o *Observer, c RuntimeConfig, material TLSMaterial) 
 	if c.Automatic {
 		grace = 2 * time.Minute
 	}
-	return &enrollment{node: n, observer: o, credential: key, port: c.StatusPort, client: client, missing: make(map[string]time.Time), now: time.Now, grace: grace, targetRaiseWindow: 5 * time.Minute, targetLowerWindow: 15 * time.Minute}, nil
+	leaf, err := parseLeaf(material.Client.Certificates[0])
+	if err != nil {
+		return nil, err
+	}
+	hash := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
+	return &enrollment{localKeyHash: hex.EncodeToString(hash[:]), node: n, observer: o, credential: key, port: c.StatusPort, client: client, missing: make(map[string]time.Time), now: time.Now, grace: grace, targetRaiseWindow: 5 * time.Minute, targetLowerWindow: 15 * time.Minute}, nil
 }
 
 func (e *enrollment) serve(w http.ResponseWriter, r *http.Request) {
@@ -211,10 +218,40 @@ func (e *enrollment) admit(ctx context.Context, a admission) error {
 	}
 	if r := records[key]; r.Version != 0 {
 		var existing admission
-		if decodeStrict(r.Value, &existing) != nil || existing.Retired || existing.KeyHash != a.KeyHash || existing.Member.ID != a.Member.ID || (!addressChange && existing != a) {
+		if decodeStrict(r.Value, &existing) != nil || existing.KeyHash != a.KeyHash || existing.Member.ID != a.Member.ID {
 			return ErrInvalid
 		}
-		if addressChange {
+		returning := existing.Retired
+		present := false
+		for _, server := range configuration.Servers {
+			if string(server.ID) == a.Member.ID {
+				present = true
+			}
+		}
+		if returning && present {
+			return ErrInvalid
+		}
+		if !present {
+			address, _ := netip.ParseAddrPort(a.Member.Address)
+			peer, err := e.observer.probe(ctx, netip.AddrPortFrom(address.Addr(), e.port))
+			if err != nil || peer.Status.ID != a.Member.ID {
+				return ErrInvalid
+			}
+			// Even a nonvoter's higher-term replication response forces the leader down.
+			if peer.Status.Term > e.node.raft.CurrentTerm() {
+				return ErrNotCaughtUp
+			}
+			// A non-retired, stranded history may predate forced recovery. It cannot
+			// rejoin safely until the recovery-generation protocol verifies its lineage.
+			if !returning && peer.Status.LastIndex > 0 {
+				return ErrNotCaughtUp
+			}
+		}
+		if !returning && !addressChange && existing != a {
+			return ErrInvalid
+		}
+
+		if addressChange || returning {
 			data, _ := json.Marshal(a)
 			if err := e.node.Commit(ctx, Transaction{Schema: 1, Checks: []Check{{Key: key, Version: r.Version}}, Writes: []Write{{Key: key, Value: data}}}); err != nil {
 				return err
@@ -305,6 +342,9 @@ func (e *enrollment) reconcile(ctx context.Context) error {
 		return ErrNotLeader
 	}
 	healthy := e.probeMembers(ctx, configuration)
+	if err := e.rememberMemberKeys(ctx, configuration); err != nil {
+		return err
+	}
 	var voters, learners []Member
 	for _, s := range configuration.Servers {
 		m, err := parseAddress(string(s.Address))
@@ -451,7 +491,7 @@ func (e *enrollment) Run(ctx context.Context) {
 						found = true
 					}
 				}
-				if !found {
+				if e.shouldRequestRejoin(found, e.now()) {
 					err = e.request(bounded)
 				}
 			}

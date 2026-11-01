@@ -169,7 +169,11 @@ func (h *churnCluster) enroll(n *churnNode) error {
 	if err := n.observer.Refresh(context.Background()); err != nil {
 		return err
 	}
-	return n.enrollment.request(context.Background())
+	if err := n.enrollment.request(context.Background()); err != nil {
+		return err
+	}
+	await(h.t, func() bool { return n.node.state.appliedIndex() >= leader.node.state.appliedIndex() })
+	return nil
 }
 func (h *churnCluster) step() error {
 	n := h.leader()

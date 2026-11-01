@@ -3,8 +3,10 @@ package cluster
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -87,6 +89,7 @@ type PeerSource interface {
 	Snapshot() ([]netip.AddrPort, bool)
 }
 type Observation struct {
+	keyHash    string
 	Address    string    `json:"address"`
 	Status     Status    `json:"status"`
 	ObservedAt time.Time `json:"observedAt"`
@@ -142,7 +145,8 @@ func (o *Observer) probe(ctx context.Context, address netip.AddrPort) (Observati
 	default:
 		return Observation{}, errors.New("invalid peer role")
 	}
-	return Observation{Address: address.String(), Status: status, ObservedAt: time.Now().UTC()}, nil
+	key := sha256.Sum256(response.TLS.PeerCertificates[0].RawSubjectPublicKeyInfo)
+	return Observation{Address: address.String(), Status: status, ObservedAt: time.Now().UTC(), keyHash: hex.EncodeToString(key[:])}, nil
 }
 
 func (o *Observer) Refresh(ctx context.Context) error {

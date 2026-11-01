@@ -495,3 +495,25 @@ identity-checked mTLS status probes. An empty node waiting over five minutes for
 admission logs a clear warning. Neither timer changes membership or triggers
 recovery. Docker health semantics are unchanged; external readiness and backup
 age alerting are still required.
+
+### Dynamic membership and returning spares
+
+The stored membership policy remains `{ "voters": 3 }` or `{ "voters": 5 }`;
+its value is the minimum voter count. Healthy, committed, directly authenticated
+members can raise the target to 5 or 7 after five continuous minutes. Lowering
+the target takes fifteen minutes and removes only failed voters after the
+replacement grace. A healthy spare replaces a failed voter without waiting for
+the target windows. At most sixteen members and seven steady-state voters are
+supported (an eighth voter is permitted briefly for replacement).
+
+Health retirement preserves an admitted identity's key pin. A returning node
+with the same key can rejoin as a learner after losing leader contact for two
+minutes; it regains its vote through normal catch-up and target rules. Existing
+bootstrap voters have their verified keys pinned while healthy. An already
+retired legacy identity without a recorded key cannot be safely re-pinned.
+
+Hashicorp Raft steps down on a higher-term replication response even from a
+learner. Such a returning node is therefore deferred until its term is no
+higher than the leader's, preserving its data and current leader authority.
+Pre-vote alone does not solve this case. Removal also cannot cancel an RPC
+already in flight; an immediate high-term restart can still complete that RPC.
