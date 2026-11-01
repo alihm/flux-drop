@@ -17,7 +17,7 @@ acceptance remain unfinished; this is not yet an unrestricted production release
 - Fsync-enabled local Raft log/stable storage using an embedded bbolt file; no
   external database server. Two retained snapshots, bounded deterministic
   metadata records and atomic compare-and-set transactions.
-- Private, node-bound persistent state; refusal to bootstrap a singleton, reuse
+- Private, node-bound persistent state; refusal to recover a singleton implicitly, reuse
   another node/cluster's state, or silently rebootstrap an identity with lost history.
 - Quorum verification and a committed barrier before authoritative reads/readiness.
   A role/status string is never authorization. Timeout may mean an indeterminate
@@ -68,7 +68,8 @@ also describes unprefixed volumes as local, unsynchronized and non-persistent.
 Do not assume that data survives container replacement: confirm actual restart
 semantics. A replacement without its old durable log must join as a **new node**,
 not resume a copied identity or bootstrap another cluster. A surviving quorum is
-still required; this does not solve simultaneous loss of all local state.
+still required for automatic admission. Explicit operator-file recovery is described
+in [Majority-loss recovery](#majority-loss-recovery).
 
 Use one stable certificate/node ID per instance, including across IP changes.
 The approved managed mode distributes a dedicated cluster CA privately to trusted
@@ -302,3 +303,195 @@ retry the whole lookup on conflict. Upgrade coordinators before HTTP processes:
 older coordinators reject this RPC, producing clear serving unavailability; there
 is no silent global fallback. Public browser and Explore caches have independent
 TTL windows, in addition to unbounded local metadata replication delays.
+
+## Majority-loss recovery
+
+Flux specification updates can replace instances and permanently remove their
+node-local `ml:state` volumes. Replication of `/data` does **not** replicate the
+Raft log or identity. With three voters, permanent loss of two stops elections;
+empty replacements cannot admit themselves. A healthy Docker container can
+remain in that state indefinitely. Alert externally on application `/readyz`
+(failed authority/metadata service), not Docker health status. Confirm that all
+three voters are healthy and that a recent encrypted backup exists **before**
+any update; replace one voter at a time and wait for three healthy voters again.
+
+Recovery is destructive consensus surgery, never an availability timeout. First
+confirm the other voters are permanently gone and fence them against returning.
+Exactly **one** node may perform either recovery procedure in a cluster. Two
+independent recoveries, even from the same backup, can create conflicting
+histories and must never run. Do not copy identities, keys, request files or Raft
+volumes onto additional live nodes. Keep the original cluster identity, app and
+private passphrase. Fresh replacements use their own new identities and the
+normal authenticated learner-admission path.
+
+Only an operator-written request file in the node's configured `StateDir` can
+request recovery. In automatic deployments that directory is
+`/var/lib/drop-cluster/private`, not the mount root. There is no recovery network
+API, environment switch, command flag, discovery decision or automatic timeout.
+`drop-cluster -status` and `-healthcheck` only query the authenticated running
+listener; they never open or recover the database. Writing a request while the
+coordinator runs has no effect until its next normal startup.
+
+### Choose a recovery source
+
+Prefer the surviving voter with the most complete trustworthy log. Its committed
+metadata, sessions, ownership indexes and project records are retained.
+**Hashicorp RecoverCluster implicitly commits its entire available log tail**,
+including entries that may not previously have committed. Records existing only
+on lost voters, or only in a speculative async journal, cannot be recovered.
+Keep the complete off-node original so this decision can be audited.
+
+If no node has usable state, restore an authenticated encrypted metadata backup
+onto one empty node. All metadata writes after that backup are lost. That can
+restore old session validity, ownership, privacy or deletion state, as well as
+lose newly published projects. Files in `/data` cannot reconstruct those missing
+security records. Treat the rollback as a security incident and review affected
+access and revocations. Recovery does not alter serving or authorization policy.
+
+### Surviving voter: one-shot singleton recovery
+
+1. Fence all permanently lost voters. Record the selected survivor's authenticated
+   status with `drop-cluster -status`: cluster ID, node ID, term and `lastIndex`.
+   Verify the local manifest and identity agree. Do not use a discovery index or
+   an FSM revision as the expected log index. A snapshot-only store can have
+   `lastIndex: 0`; the exact value must still be supplied explicitly.
+2. Stop the coordinator and make a protected **off-node backup of the entire
+   StateDir**, including `raft.db`, `snapshots/`, identity, journal, manifest and
+   private keys, plus surviving encrypted metadata backups and project content.
+   A raw Bolt copy must be made while the coordinator is stopped. Retain the
+   passphrase separately in a secure vault. Never copy these private files into
+   `/data` or a public archive.
+3. Write this request on the selected node as the container's user (UID/GID
+   65534 in the image). With the container stopped, use its host volume path
+   or a maintenance container mounted to that volume, without starting another
+   coordinator. Substitute reviewed IDs and the exact recorded index;
+   the example index is not a default:
+
+   ```sh
+   STATE=/var/lib/drop-cluster/private
+   umask 077
+   cat > "$STATE/recover-singleton.json" <<'JSON'
+   {"clusterID":"REPLACE_WITH_CLUSTER_ID","nodeID":"REPLACE_WITH_SURVIVOR_ID","expectedLastIndex":135064}
+   JSON
+   sync
+   ```
+
+   The file must be a regular file owned by Drop's effective UID. Symlinks,
+   unknown/duplicate fields, malformed JSON, identity mismatches, an index
+   mismatch, missing history, and a node that is not a voter in the latest
+   persisted configuration fail startup. Refusal preflight opens Bolt read-only;
+   it does not rewrite `raft.db`.
+4. Perform a **soft restart/redeploy on that same host and existing local
+   volume**. Verify that the chosen Flux action preserves `ml:state`; do not
+   make a specification update or hard redeploy that destroys the survivor.
+   Before mutation, startup copies and fsyncs `raft.db`, `snapshots/` and
+   `identity.json` under `pre-recovery-<UTC timestamp>/`. A copy failure aborts.
+   RecoverCluster uses a scratch FSM; the running Raft instance gets a fresh FSM.
+5. Check the warning log, restored metadata and authenticated status. Success
+   renames the request to `recover-singleton.done-<timestamp>` and fsyncs the
+   directory. The recovered node must elect itself with one voter. Keep the
+   automatic pre-recovery copy and the independent off-node archive.
+6. Start two fresh replacement instances using normal private credentials and
+   discovery. Verify learner admission, catch-up and promotion back to **three
+   voters**. Replicated user/security writes remain blocked until a second voter
+   joins in async mode; cluster-internal enrollment writes can proceed. Verify
+   representative sessions, owner project listings, indexes, new writes and
+   readiness before reopening management traffic. Do not declare a singleton a
+   repaired production cluster. Verify that stopping any one rebuilt voter still
+   leaves a functioning majority.
+
+The consumed request prevents recovery repeating on normal restarts. Keep the
+`.done-*` files for audit. If a recovery or request-consumption step fails, startup
+fails; do not edit the expected index until the changed disk state and original
+backup have been reviewed. Interrupted recovery may have partially installed a
+snapshot; restoring the off-node original before retry is an operator action.
+Never remove a `.done-*` suffix to rerun recovery against a running cluster.
+
+### Encrypted metadata backups
+
+The leader checks every **15 minutes** and writes only when its committed FSM
+history changed. After a restart or leadership change, the last available backup
+is authenticated before using its history as an unchanged-state hint. The speculative async view
+is excluded. Files live only in `/data/metadata-backups/`, outside every Nginx
+alias and project-content path. They contain the full metadata FSM, not project
+file bytes or node TLS keys.
+
+AES-256-GCM encrypts the snapshot in memory before any replicated-volume write.
+HKDF-SHA256 derives its key from the existing `DROP_CLUSTER_PASSPHRASE`, with the
+cluster ID as salt and dedicated info `flux-drop/metadata-backups/v1`. Cluster ID,
+index, leader term at capture and creation time are authenticated. A fresh random
+nonce is used for every file. Retain the original strong passphrase independently
+of the Flux hosts; a wrong key or altered file fails authentication. Explicit
+manual-credential deployments without this secret cannot produce or restore
+these encrypted backups: failures are reported without affecting metadata service.
+No new environment variables or recovery switches are added.
+
+Files are atomically renamed only after fsync; the directory is fsynced. The six
+newest encrypted files for this cluster are kept. The plaintext snapshot is capped
+at 256 MiB (encrypted file cap: 256 MiB + 8192 bytes), and a write requires 2 GiB
+free headroom plus twice the candidate encrypted-file size, preserving the default
+upload-admission margin. Provision space for
+six snapshots **in addition to project content**. Backup and retention failures
+increment `backupFailures` and log at most once per five minutes. They never
+fail writes, serving or readiness. Export that counter and alert on missing/stale
+backups independently. Copy backups off-node too: Syncthing replication is
+asynchronous, and a successful local write does not prove a second durable copy.
+
+### No surviving state: one-shot backup restore
+
+1. Confirm every old voter is permanently gone and fence it. Choose **one** new
+   node and provision its normal identity/TLS/manifest with the original app,
+   cluster ID and passphrase. Stop its coordinator. It must have no existing
+   Raft log entries, stable term or snapshots. A matching pre-provisioned node
+   identity is permitted; usable or incomplete Raft history is refused.
+2. Back up surviving `/data` and the selected encrypted backup **off-node** before
+   any write. Choose an exact `.enc` file from the surviving
+   `/data/metadata-backups/` directory. There is no automatic "latest backup"
+   choice. Confirm its age and explicitly accept the loss of all later metadata.
+3. As the container UID, write the following regular file, then `sync`:
+
+   ```json
+   {
+     "clusterID": "REPLACE_WITH_ORIGINAL_CLUSTER_ID",
+     "nodeID": "REPLACE_WITH_NEW_NODE_ID",
+     "backupFile": "/data/metadata-backups/REPLACE_WITH_EXACT_BACKUP_FILENAME.enc"
+   }
+   ```
+
+   Save it at `/var/lib/drop-cluster/private/restore-singleton.json`. The backup
+   path must be an exact, clean absolute regular filename. An off-node copy
+   staged in the node-local `recovery-backup/` directory is also accepted. File
+   links, parent-directory links and oversized files are refused. Do not also supply `recover-singleton.json`.
+4. Soft restart the selected node, preserving its new local volume. The backup
+   is fully authenticated, decrypted and FSM-validated **before** opening a
+   writable Raft store. Startup installs its state as a sole-voter snapshot,
+   preserves the revision ceiling and term, and atomically consumes the request
+   as `restore-singleton.done-<timestamp>`. A warning identifies the backup date
+   and explicitly reports loss of subsequent writes.
+5. Follow the same two-replacement enrollment, three-voter verification,
+   metadata/security review and readiness checks as survivor recovery. A second
+   normal restart must not restore again. Never restore the same backup on a
+   second node; enroll it empty instead.
+
+A failure leaves startup stopped for operator review. If installation was
+interrupted after verification, local history may already exist: retry refuses
+it rather than overwrite it automatically. Retain the original encrypted backup
+and prepare another reviewed empty node only after fencing the failed attempt.
+
+### Operational status and alerts
+
+Authenticated `/_drop_cluster/status` and `drop-cluster -status` add:
+
+- `voters` and `learners`: counts in the latest local Raft configuration.
+- `lastContactAgeSeconds`: follower age since leader contact; `null` if none
+  recorded, and zero on a leader. This is observational, not authority proof.
+- `lastSuccessfulBackup`: UTC time of the last successful encrypted
+  backup written or validated by this process, or `null` before one is known. It is not proof of off-node replication.
+- `backupFailures`: this process's cumulative backup/retention failure counter.
+
+A separate observational worker emits a rate-limited `slog.Error` after more
+than two minutes without a leader, including voter IDs unreachable by direct,
+identity-checked mTLS status probes. An empty node waiting over five minutes for
+admission logs a clear warning. Neither timer changes membership or triggers
+recovery. Docker health semantics are unchanged; external readiness and backup
+age alerting are still required.

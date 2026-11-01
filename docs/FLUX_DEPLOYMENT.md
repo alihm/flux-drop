@@ -49,7 +49,7 @@ but it does not hold Drop's coordinator state.
 
 | Persistent volume | Replication |
 |---|---|
-| `/data` — immutable project content and deployment-existence marker | Enabled |
+| `/data` — immutable project content, deployment-existence marker and encrypted metadata backups | Enabled |
 | `/var/lib/drop-cluster` — node-local bind root; Drop stores ALL node-local configuration, identity, keys, journal, Raft log/snapshots, observations and upload staging under its private child `/var/lib/drop-cluster/private` | Disabled |
 
 Flux derives the `state` exclusion from `ml:`. Flux creates bind directories
@@ -117,8 +117,10 @@ by the quorum. An empty replacement gets a new identity. Majority loss requires
 restoring enough original state or reviewed recovery; no timeout overrides security
 history and no automatic destructive rebootstrap is performed.
 If all node-local logs disappear while `/data/cluster-genesis.json` survives,
-startup refuses to create a new security history. No code-only fallback can
-reconstruct the lost committed sessions, API keys and ownership records.
+startup refuses to create a new security history automatically. Explicit recovery
+from a surviving voter or an encrypted metadata backup is available only through
+an operator-written request file; see the runbook below. Project files alone
+cannot reconstruct lost sessions, API keys or ownership records.
 
 Content is fsynced locally before acknowledgement but may be lost after primary
 failure. Security changes wait for the ordered replication stream, including earlier
@@ -146,3 +148,55 @@ remain deployment acceptance tests. The isolated Docker lifecycle uses shared
 content to test metadata failover, not to simulate Syncthing durability. Old
 Firestore/manual-cluster data is not automatically migrated; use fresh test volumes
 or reviewed migration, and do not mix old and new protocol images.
+
+
+## Majority loss, backups and update checks
+
+A Flux **specification update can replace instances and destroy their `ml:state`
+volumes**. Persistent on one host does not mean replicated or preserved after
+host replacement. Before every update, verify three healthy voters, working
+application `/readyz`, and a recent successful encrypted metadata backup. Update
+one voter at a time and wait for all three healthy voters again. Keep a protected
+off-node copy of state, replicated data and the private passphrase.
+
+The leader backs up committed metadata every 15 minutes when it changed, keeping
+six AES-256-GCM encrypted files in `/data/metadata-backups/`. The existing cluster
+passphrase derives the encryption key; no new setting is needed. Project file
+bytes and node TLS keys are not in these snapshots. Leave room for six bounded
+snapshots alongside content. Replicated backups can lag on other hosts; also
+retain copies independently of the Flux deployment. Backup failures do not affect
+serving or readiness, so monitor `backupFailures` and `lastSuccessfulBackup` in
+authenticated status separately. The latter is the last backup success time written or validated by that process.
+
+Alert on **application `/readyz`**, not Docker "healthy". Docker health only
+checks liveness and authenticated listener identity, so a leaderless candidate
+can remain healthy for days. Authenticated status / `drop-cluster -status` now
+also report voter/learner counts and last-contact age. Leader loss over two
+minutes logs an error naming unreachable voters; an empty node waiting over five
+minutes for admission logs a warning. These observations never initiate recovery.
+
+Use [CLUSTER.md: Majority-loss recovery](CLUSTER.md#majority-loss-recovery) for the
+complete reviewed procedure. Fence the permanently lost voters first, select
+exactly one recovery node, stop its coordinator, back up off-node, write the
+UID-65534-owned request, soft restart on the same preserved local volume, and
+verify recovery and enrollment back to three voters:
+
+- A surviving voter uses `recover-singleton.json` with `clusterID`, `nodeID`,
+  and the exact `expectedLastIndex`. Its existing history is retained, but the
+  entire surviving log tail is implicitly committed, including previously
+  uncommitted entries. State present only on lost nodes or in discarded async
+  journals is lost. An fsynced local `pre-recovery-*` copy precedes mutation.
+- With no usable node state, one empty node uses `restore-singleton.json` with
+  `clusterID`, its new `nodeID`, and the exact absolute `backupFile` path. Use a surviving
+  file under `/data/metadata-backups/` or an off-node copy staged privately under
+  `StateDir/recovery-backup/`. The complete backup is authenticated before mutation.
+  All metadata changes after that backup are lost, including security changes;
+  review the rollback before reopening management traffic.
+
+Requests live in `/var/lib/drop-cluster/private` and are consumed once as
+`.done-<timestamp>` only after success. The backup folder is outside all public
+Nginx aliases. Never run two independent recoveries in one cluster, restore a
+backup on multiple nodes, or copy a live node's identity to a replacement. Fresh
+replacements enroll through the unchanged mTLS/credential learner flow. No
+recovery environment variable, flag, timeout, discovery result or API exists;
+`-status` and `-healthcheck` never open Raft state or execute requests.
