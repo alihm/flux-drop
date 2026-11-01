@@ -72,6 +72,13 @@ func start(c Config, transport raft.Transport, tune func(*raft.Config)) (*Node, 
 	if err != nil {
 		return nil, err
 	}
+	restore, err := prepareSingletonRestore(c, request != nil)
+	if err != nil {
+		return nil, err
+	}
+	if restore != nil {
+		defer clear(restore.plaintext)
+	}
 	options := raftboltdb.Options{Path: filepath.Join(c.StateDir, "raft.db"), BoltOptions: &bbolt.Options{Timeout: time.Second}}
 	if request != nil {
 		options.BoltOptions.ReadOnly = true
@@ -101,7 +108,14 @@ func start(c Config, transport raft.Transport, tune func(*raft.Config)) (*Node, 
 	if request != nil && !existing {
 		return nil, errors.New("singleton recovery requires existing Raft state")
 	}
-	if err := bindIdentity(c, existing); err != nil {
+	if restore != nil && existing {
+		return nil, errors.New("backup restore refuses existing Raft state")
+	}
+	bindConfig := c
+	if restore != nil {
+		bindConfig.InitialVoters = nil
+	} // explicit restore, never an implicit rebootstrap
+	if err := bindIdentity(bindConfig, existing); err != nil {
 		return nil, err
 	}
 	if request != nil {
@@ -137,6 +151,12 @@ func start(c Config, transport raft.Transport, tune func(*raft.Config)) (*Node, 
 		if err := recoverSingleton(c, rc, store, snapshots, transport, request, requestInfo, stamp); err != nil {
 			return nil, err
 		}
+	}
+	if restore != nil {
+		if err := installSingletonRestore(c, store, snapshots, transport, restore); err != nil {
+			return nil, err
+		}
+		existing = true
 	}
 	r, err := raft.NewRaft(rc, fsm, store, store, snapshots, transport)
 	if err != nil {
