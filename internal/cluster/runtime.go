@@ -250,13 +250,14 @@ func (c RuntimeConfig) tlsMaterial() (TLSMaterial, error) {
 }
 
 type Runtime struct {
-	Node      *Node
-	Observer  *Observer
-	Discovery *replica.Discovery
-	server    *http.Server
-	cancel    context.CancelFunc
-	workers   sync.WaitGroup
-	errors    chan error
+	statusPort uint16
+	Node       *Node
+	Observer   *Observer
+	Discovery  *replica.Discovery
+	server     *http.Server
+	cancel     context.CancelFunc
+	workers    sync.WaitGroup
+	errors     chan error
 }
 
 func StartRuntime(parent context.Context, c RuntimeConfig) (*Runtime, error) {
@@ -312,14 +313,15 @@ func startRuntimeWithSetup(parent context.Context, c RuntimeConfig, runDiscovery
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
-	r := &Runtime{Node: node, Observer: observer, Discovery: discovery, cancel: cancel, errors: make(chan error, 1)}
+	r := &Runtime{statusPort: c.StatusPort, Node: node, Observer: observer, Discovery: discovery, cancel: cancel, errors: make(chan error, 1)}
 	r.server = &http.Server{Handler: node.statusHandler(c.App, observer), TLSConfig: material.Server.Clone(), ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 7 * time.Second, IdleTimeout: 15 * time.Second, MaxHeaderBytes: 8 << 10, BaseContext: func(net.Listener) context.Context { return ctx }}
 	if setup != nil {
 		setup(r)
 	}
-	r.workers.Add(2)
+	r.workers.Add(3)
 	go func() { defer r.workers.Done(); runDiscovery(ctx, discovery) }()
 	go func() { defer r.workers.Done(); observer.Run(ctx) }()
+	go func() { defer r.workers.Done(); r.runDiagnostics(ctx) }()
 	if node.auto != nil {
 		r.workers.Add(1)
 		go func() { defer r.workers.Done(); node.auto.run(ctx) }()

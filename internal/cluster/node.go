@@ -444,6 +444,12 @@ func (n *Node) Ready(ctx context.Context) error {
 }
 
 type Status struct {
+	Voters                int        `json:"voters"`
+	Learners              int        `json:"learners"`
+	LastContactAgeSeconds *int64     `json:"lastContactAgeSeconds"`
+	LastSuccessfulBackup  *time.Time `json:"lastSuccessfulBackup"`
+	BackupFailures        uint64     `json:"backupFailures"`
+
 	ClusterID     string `json:"clusterID"`
 	ID            string `json:"id"`
 	Role          string `json:"role"`
@@ -466,6 +472,28 @@ func (n *Node) Status() Status {
 	// AppliedIndex is queued to the FSM; StateIndex is fully consumed metadata.
 	stateIndex := n.state.appliedIndex()
 	s := Status{ClusterID: n.config.ClusterID, ID: n.config.Local.ID, Role: n.raft.State().String(), LeaderID: string(leader), UptimeSeconds: int64(time.Since(n.started) / time.Second), Term: n.raft.CurrentTerm(), StateIndex: stateIndex, AppliedIndex: n.raft.AppliedIndex(), LastIndex: n.raft.LastIndex()}
+	configuration := n.raft.GetConfiguration()
+	if configuration.Error() == nil {
+		for _, member := range configuration.Configuration().Servers {
+			if member.Suffrage == raft.Voter {
+				s.Voters++
+			} else {
+				s.Learners++
+			}
+		}
+	}
+	if s.Role == "Leader" {
+		age := int64(0)
+		s.LastContactAgeSeconds = &age
+	} else if contact := n.raft.LastContact(); !contact.IsZero() {
+		age := max(int64(0), int64(time.Since(contact)/time.Second))
+		s.LastContactAgeSeconds = &age
+	}
+	if timestamp := n.lastBackupSuccess.Load(); timestamp != 0 {
+		success := time.Unix(timestamp, 0).UTC()
+		s.LastSuccessfulBackup = &success
+	}
+	s.BackupFailures = n.backupFailures.Load()
 	if n.auto != nil {
 		s.BootstrapView = n.auto.statusView()
 	}
