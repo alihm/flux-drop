@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/netip"
 
 	"github.com/hashicorp/raft"
@@ -73,7 +74,8 @@ func (n *Node) AddLearner(ctx context.Context, member Member) error {
 	if err != nil {
 		return err
 	}
-	if len(configuration.Servers) >= 9 {
+	if len(configuration.Servers) >= maxMembers {
+		slog.Warn("cluster learner admission refused: member limit reached", "node", member.ID, "max_members", maxMembers)
 		return errors.New("cluster member limit reached")
 	}
 	for _, server := range configuration.Servers {
@@ -122,22 +124,11 @@ func (n *Node) Promote(ctx context.Context, member Member, statusPort uint16, ob
 			found = true
 		}
 	}
-	if !found || voters >= 6 {
+	if !found || voters >= maxVoters+1 {
 		return ErrInvalid
 	}
-	address, _ := netip.ParseAddrPort(member.Address)
-	targetState := n.state.appliedIndex()
-	// configuration() adds a barrier. On a singleton, that new barrier can
-	// commit before learners receive it, causing perpetual false lag on every
-	// poll. Require the stable metadata + membership prefix instead; AddVoter
-	// still uses Raft's ordered configuration-change/replication protocol.
-	target := max(targetState, index)
-	observation, err := observer.probe(ctx, netip.AddrPortFrom(address.Addr(), statusPort))
-	if err != nil {
+	if err := n.learnerCaughtUp(ctx, member, statusPort, observer, n.state.appliedIndex(), index); err != nil {
 		return err
-	}
-	if observation.Status.ID != member.ID || observation.Status.Role != "Follower" || observation.Status.LastIndex < target || observation.Status.StateIndex < targetState {
-		return ErrNotCaughtUp
 	}
 	return n.wait(ctx, func() raft.Future {
 		return n.raft.AddVoter(raft.ServerID(member.ID), raft.ServerAddress(member.raftAddress()), index, operationTimeout)
@@ -172,4 +163,19 @@ func (n *Node) RemoveMember(ctx context.Context, id string) error {
 		return errors.New("removal would violate minimum three-voter membership")
 	}
 	return n.wait(ctx, func() raft.Future { return n.raft.RemoveServer(raft.ServerID(id), index, operationTimeout) })
+}
+
+// A non-mutating preflight for an entire odd-number step. Promote repeats this
+// check under the membership lock immediately before changing the configuration.
+func (n *Node) learnerCaughtUp(ctx context.Context, member Member, statusPort uint16, observer *Observer, targetState, index uint64) error {
+	address, _ := netip.ParseAddrPort(member.Address)
+	target := max(targetState, index)
+	observation, err := observer.probe(ctx, netip.AddrPortFrom(address.Addr(), statusPort))
+	if err != nil {
+		return err
+	}
+	if observation.Status.ID != member.ID || observation.Status.Role != "Follower" || observation.Status.LastIndex < target || observation.Status.StateIndex < targetState {
+		return ErrNotCaughtUp
+	}
+	return nil
 }

@@ -31,7 +31,7 @@ func (r *Runtime) diagnosticTick(ctx context.Context, state *diagnosticState, no
 		configuration := n.raft.GetConfiguration()
 		var unreachable []string
 		if configuration.Error() == nil {
-			// There are at most nine members. Bounded concurrent authenticated probes
+			// There are at most sixteen members. Bounded concurrent authenticated probes
 			// prevent two dead hosts from serially delaying this diagnostic worker.
 			var workers sync.WaitGroup
 			var mu sync.Mutex

@@ -43,6 +43,7 @@ type Node struct {
 	raft            *raft.Raft
 	state           *state
 	store           *raftboltdb.BoltStore
+	snapshots       raft.SnapshotStore
 	transport       raft.Transport
 	config          Config
 	started         time.Time
@@ -162,7 +163,7 @@ func start(c Config, transport raft.Transport, tune func(*raft.Config)) (*Node, 
 	if err != nil {
 		return nil, err
 	}
-	n := &Node{raft: r, state: fsm, store: store, transport: transport, config: c, started: time.Now(), localEpoch: rand.Text(), operations: make(chan struct{}, 64)}
+	n := &Node{raft: r, state: fsm, store: store, snapshots: snapshots, transport: transport, config: c, started: time.Now(), localEpoch: rand.Text(), operations: make(chan struct{}, 64)}
 	if c.AsyncContent {
 		n.async, err = newAsyncWriter(n)
 		if err != nil {

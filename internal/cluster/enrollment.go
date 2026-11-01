@@ -26,6 +26,8 @@ import (
 
 const enrollmentPath = "/_drop_cluster/enroll"
 const membershipPolicyKey = "cluster_policy/membership"
+const maxVoters = 7
+const maxMembers = 16
 
 type admission struct {
 	Member  Member `json:"member"`
@@ -40,14 +42,20 @@ type membershipPolicy struct {
 // private shared admission credential. The credential never replaces TLS trust
 // or bootstraps a voting configuration from discovery.
 type enrollment struct {
-	node       *Node
-	observer   *Observer
-	credential [32]byte
-	port       uint16
-	client     *http.Client
-	missing    map[string]time.Time
-	now        func() time.Time
-	grace      time.Duration
+	node              *Node
+	observer          *Observer
+	credential        [32]byte
+	port              uint16
+	client            *http.Client
+	missing           map[string]time.Time
+	now               func() time.Time
+	grace             time.Duration
+	targetRaiseWindow time.Duration
+	targetLowerWindow time.Duration
+	targetTerm        uint64
+	activeTarget      int
+	pendingTarget     int
+	targetSince       time.Time
 }
 
 func loadEnrollmentCredential(path, contentDir string) ([32]byte, error) {
@@ -123,7 +131,7 @@ func newEnrollment(n *Node, o *Observer, c RuntimeConfig, material TLSMaterial) 
 	if c.Automatic {
 		grace = 2 * time.Minute
 	}
-	return &enrollment{node: n, observer: o, credential: key, port: c.StatusPort, client: client, missing: make(map[string]time.Time), now: time.Now, grace: grace}, nil
+	return &enrollment{node: n, observer: o, credential: key, port: c.StatusPort, client: client, missing: make(map[string]time.Time), now: time.Now, grace: grace, targetRaiseWindow: 5 * time.Minute, targetLowerWindow: 15 * time.Minute}, nil
 }
 
 func (e *enrollment) serve(w http.ResponseWriter, r *http.Request) {
@@ -169,6 +177,18 @@ func (e *enrollment) admit(ctx context.Context, a admission) error {
 	configuration, _, err := e.node.configuration(ctx)
 	if err != nil {
 		return err
+	}
+	if len(configuration.Servers) >= maxMembers {
+		present := false
+		for _, server := range configuration.Servers {
+			if string(server.ID) == a.Member.ID {
+				present = true
+			}
+		}
+		if !present {
+			slog.Warn("cluster learner admission refused: member limit reached", "node", a.Member.ID, "max_members", maxMembers)
+			return errors.New("cluster member limit reached")
+		}
 	}
 	addressChange := false
 	for _, s := range configuration.Servers {
@@ -255,8 +275,7 @@ func (e *enrollment) target(ctx context.Context) (int, error) {
 		}
 		return p.Voters, nil
 	}
-	// Only an explicit bootstrap manifest may set the immutable target. A
-	// temporarily enlarged membership must never become the new target.
+	// The persisted policy is an immutable minimum, never a sampled membership size.
 	n := len(e.node.config.InitialVoters)
 	if e.node.config.Automatic {
 		n = 3
@@ -270,7 +289,7 @@ func (e *enrollment) target(ctx context.Context) (int, error) {
 }
 
 func (e *enrollment) reconcile(ctx context.Context) error {
-	configuration, _, err := e.node.configuration(ctx)
+	configuration, configIndex, err := e.committedConfiguration(ctx)
 	if err != nil {
 		return err
 	}
@@ -278,40 +297,19 @@ func (e *enrollment) reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	peers, fresh := e.observer.Snapshot()
+	_, fresh := e.observer.Snapshot()
 	if !fresh {
 		e.missing = make(map[string]time.Time)
+		e.targetSince = time.Time{}
+		e.pendingTarget = 0
 		return ErrNotLeader
 	}
-	healthy := map[string]bool{e.node.config.Local.ID: true}
-	for _, p := range peers {
-		if p.Status.Role == "Follower" || p.Status.Role == "Leader" {
-			for _, server := range configuration.Servers {
-				m, err := parseAddress(string(server.Address))
-				if err != nil {
-					return err
-				}
-				a, _ := netip.ParseAddrPort(m.Address)
-				if m.ID == p.Status.ID && p.Address == netip.AddrPortFrom(a.Addr(), e.port).String() {
-					healthy[p.Status.ID] = true
-				}
-			}
-		}
-	}
+	healthy := e.probeMembers(ctx, configuration)
 	var voters, learners []Member
 	for _, s := range configuration.Servers {
 		m, err := parseAddress(string(s.Address))
 		if err != nil {
 			return err
-		}
-		if !healthy[m.ID] {
-			// Discovery omission is not evidence of failure. Probe the committed
-			// address directly before starting or extending a replacement grace.
-			a, _ := netip.ParseAddrPort(m.Address)
-			p, probeErr := e.observer.probe(ctx, netip.AddrPortFrom(a.Addr(), e.port))
-			if probeErr == nil && p.Status.ID == m.ID && (p.Status.Role == "Follower" || p.Status.Role == "Leader") {
-				healthy[m.ID] = true
-			}
 		}
 		if healthy[m.ID] {
 			delete(e.missing, m.ID)
@@ -334,27 +332,56 @@ func (e *enrollment) reconcile(ctx context.Context) error {
 			break
 		}
 	}
-	if len(voters) > target && failed != nil {
+	eligible := 0
+	for _, ok := range healthy {
+		if ok {
+			eligible++
+		}
+	}
+	target = e.adjustTarget(target, len(voters), eligible)
+	// Complete a promote-then-retire replacement immediately, including after a
+	// leadership change loses the controller's in-memory windows.
+	if failed != nil && len(voters) > target && len(voters)%2 == 0 {
 		return e.retire(ctx, *failed)
 	}
+	var ready []Member
 	for _, m := range learners {
 		if since := e.missing[m.ID]; !since.IsZero() && e.now().Sub(since) >= e.grace {
 			return e.retire(ctx, m)
 		}
-		if !healthy[m.ID] || (len(voters) >= target && failed == nil) || len(voters) > target {
+		if !healthy[m.ID] {
 			continue
 		}
-		key := "cluster_admissions/" + m.ID
-		records, err := e.node.Read(ctx, []string{key})
+		records, err := e.node.Read(ctx, []string{"cluster_admissions/" + m.ID})
 		if err != nil {
 			return err
 		}
 		var a admission
-		if decodeStrict(records[key].Value, &a) != nil || a.Retired || a.Member != m {
+		if decodeStrict(records["cluster_admissions/"+m.ID].Value, &a) != nil || a.Retired || a.Member != m {
 			continue
 		}
-		return e.node.Promote(ctx, m, e.port, e.observer)
+		if e.node.learnerCaughtUp(ctx, m, e.port, e.observer, e.node.state.appliedIndex(), configIndex) == nil {
+			ready = append(ready, m)
+		}
 	}
+	// Replacement takes priority over scaling windows, but never preempts the
+	// existing failure grace or the normal per-learner catch-up proof.
+	if failed != nil && len(ready) > 0 && len(voters) <= maxVoters {
+		return e.node.Promote(ctx, ready[0], e.port, e.observer)
+	}
+	if len(voters) < target && len(ready) > 0 {
+		next := len(voters) + 1
+		if next%2 == 0 {
+			next++
+		}
+		if len(voters) < target && len(voters) < 3 || (target >= next && len(ready) >= next-len(voters)) {
+			return e.node.Promote(ctx, ready[0], e.port, e.observer)
+		}
+	}
+	if failed != nil && len(voters) > target {
+		return e.retire(ctx, *failed)
+	}
+
 	return nil
 }
 
