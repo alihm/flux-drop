@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/go-hclog"
@@ -27,6 +28,11 @@ import (
 const operationTimeout = 5 * time.Second
 
 type Node struct {
+	backupCancel      context.CancelFunc
+	backupDone        chan struct{}
+	backupFailures    atomic.Uint64
+	lastBackupSuccess atomic.Int64
+
 	analytics       *analytics.Archive
 	analyticsCancel context.CancelFunc
 	analyticsDone   chan struct{}
@@ -158,6 +164,7 @@ func start(c Config, transport raft.Transport, tune func(*raft.Config)) (*Node, 
 		}
 	}
 	n.startAnalytics()
+	n.startMetadataBackups()
 	ok = true
 	return n, nil
 }
@@ -209,6 +216,10 @@ func bindIdentity(c Config, hasState bool) error {
 
 func (n *Node) Close() error {
 	n.closeOnce.Do(func() {
+		if n.backupCancel != nil {
+			n.backupCancel()
+			<-n.backupDone
+		}
 		if n.analyticsCancel != nil {
 			n.analyticsCancel()
 			<-n.analyticsDone
