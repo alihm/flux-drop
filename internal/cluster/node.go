@@ -62,14 +62,25 @@ func start(c Config, transport raft.Transport, tune func(*raft.Config)) (*Node, 
 	if err := prepareDirectory(c); err != nil {
 		return nil, err
 	}
-	store, err := raftboltdb.New(raftboltdb.Options{Path: filepath.Join(c.StateDir, "raft.db"), BoltOptions: &bbolt.Options{Timeout: time.Second}})
+	request, requestInfo, err := singletonRequestFile(c)
 	if err != nil {
 		return nil, err
 	}
+	options := raftboltdb.Options{Path: filepath.Join(c.StateDir, "raft.db"), BoltOptions: &bbolt.Options{Timeout: time.Second}}
+	if request != nil {
+		options.BoltOptions.ReadOnly = true
+	}
+	store, err := raftboltdb.New(options)
+	if err != nil {
+		return nil, err
+	}
+
 	ok := false
 	defer func() {
 		if !ok {
-			_ = store.Close()
+			if store != nil {
+				_ = store.Close()
+			}
 		}
 	}()
 	logger := hclog.New(&hclog.LoggerOptions{Name: "drop-raft", Level: hclog.Warn, Output: os.Stderr})
@@ -81,8 +92,16 @@ func start(c Config, transport raft.Transport, tune func(*raft.Config)) (*Node, 
 	if err != nil {
 		return nil, err
 	}
+	if request != nil && !existing {
+		return nil, errors.New("singleton recovery requires existing Raft state")
+	}
 	if err := bindIdentity(c, existing); err != nil {
 		return nil, err
+	}
+	if request != nil {
+		if err := validateSingleton(c, request, existing, store, snapshots); err != nil {
+			return nil, err
+		}
 	}
 	fsm := newState(c.ClusterID)
 	rc := raft.DefaultConfig()
@@ -95,6 +114,23 @@ func start(c Config, transport raft.Transport, tune func(*raft.Config)) (*Node, 
 	rc.ShutdownOnRemove = false
 	if tune != nil {
 		tune(rc)
+	}
+	if request != nil {
+		stamp := recoveryTimestamp()
+		if err := backupBeforeRecovery(c, stamp); err != nil {
+			return nil, err
+		}
+		if err := store.Close(); err != nil {
+			return nil, err
+		}
+		options.BoltOptions.ReadOnly = false
+		store, err = raftboltdb.New(options)
+		if err != nil {
+			return nil, err
+		}
+		if err := recoverSingleton(c, rc, store, snapshots, transport, request, requestInfo, stamp); err != nil {
+			return nil, err
+		}
 	}
 	r, err := raft.NewRaft(rc, fsm, store, store, snapshots, transport)
 	if err != nil {

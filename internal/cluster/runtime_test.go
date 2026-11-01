@@ -236,9 +236,29 @@ func TestCoordinatorRuntimeLifecycle(t *testing.T) {
 		if _, err := repo.GetOwned(ctx, actor, published.ID); err == nil {
 			t.Fatal("rotated session can still manage project")
 		}
+		// Both observation-only paths ignore pending operator requests, including
+		// deliberately malformed ones that would fail a normal coordinator startup.
+		for _, name := range []string{"recover-singleton.json", "restore-singleton.json"} {
+			path := filepath.Join(c.StateDir, name)
+			if err := os.WriteFile(path, []byte("pending operator review"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := LocalStatus(ctx, c); err != nil {
+			t.Fatal("status attempted recovery", err)
+		}
 		if err := CheckHealth(ctx, c); err != nil {
 			t.Fatal("healthy coordinator rejected", err)
 		}
+		for _, name := range []string{"recover-singleton.json", "restore-singleton.json"} {
+			path := filepath.Join(c.StateDir, name)
+			raw, err := os.ReadFile(path)
+			if err != nil || string(raw) != "pending operator review" {
+				t.Fatal("health/status consumed request", err)
+			}
+			os.Remove(path)
+		}
+
 		wrongNode := c
 		wrongNode.StatusListen = configs[(i+1)%len(configs)].StatusListen
 		if err := CheckHealth(ctx, wrongNode); err == nil {
