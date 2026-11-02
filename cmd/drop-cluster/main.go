@@ -24,6 +24,7 @@ func main() {
 	clusterID := flag.String("cluster-id", "", "32-character lowercase hexadecimal cluster ID for CA creation")
 	configFile := flag.String("config", cluster.ManifestPath, "node-local cluster manifest")
 	healthcheck := flag.Bool("healthcheck", false, "check the local authenticated coordinator listener without starting Raft")
+	autoRecovery := flag.String("auto-recovery", "", "write signed recovery policy: off, observe, on; or status (does not start Raft)")
 	showStatus := flag.Bool("status", false, "print authenticated local coordinator status without starting Raft")
 	flag.Parse()
 	if *createCA != "" {
@@ -39,6 +40,21 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *autoRecovery != "" {
+		c, err := cluster.LoadRuntimeConfig(*configFile)
+		if err == nil {
+			var status cluster.AutoRecoveryPolicyStatus
+			status, err = cluster.ConfigureAutoRecovery(c, *autoRecovery)
+			if err == nil {
+				err = json.NewEncoder(os.Stdout).Encode(status)
+			}
+		}
+		if err != nil {
+			slog.Error("automatic recovery policy operation failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if *healthcheck || *showStatus {
 		c, err := cluster.LoadRuntimeConfig(*configFile)
 		if err == nil {
@@ -87,6 +103,6 @@ func run(ctx context.Context, path string) error {
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
-		return fmt.Errorf("cluster status listener failed: %w", err)
+		return fmt.Errorf("cluster coordinator requires restart: %w", err)
 	}
 }

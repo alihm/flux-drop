@@ -25,10 +25,12 @@ acceptance remain unfinished; this is not yet an unrestricted production release
 - TLS 1.3 mutual authentication, application identity checks, expected destination
   node-ID pinning, cluster-specific Raft ALPN, bounded handshake concurrency.
 - Periodic validated Flux discovery and bounded authenticated status polling.
-  Discovery observations cannot change membership or elect a leader.
+  Discovery observations cannot change normal membership or elect a leader;
+  guarded recovery is separately opt-in as described below.
 - Private-credential/mTLS learner admission, live catch-up checks before promotion,
   and serialized quorum-committed replacement with a three-voter minimum. A
-  five-minute failure grace and direct probes precede replacement. Discovery
+  two-minute failure grace in automatic mode (five minutes otherwise) and direct
+  probes precede replacement. Discovery
   omission alone is not evidence that a committed member is unhealthy.
 - Credential-free Firebase verification and token-expiry-bounded sessions selected
   by the production entrypoint. Legacy Firestore is limited to emulator regression tests.
@@ -312,8 +314,8 @@ Raft log or identity. With three voters, permanent loss of two stops elections;
 empty replacements cannot admit themselves. A healthy Docker container can
 remain in that state indefinitely. Alert externally on application `/readyz`
 (failed authority/metadata service), not Docker health status. Confirm that all
-three voters are healthy and that a recent encrypted backup exists **before**
-any update; replace one voter at a time and wait for three healthy voters again.
+current voters are healthy and that a recent encrypted backup exists **before**
+any update; replace one voter at a time and wait for the configured healthy target again.
 
 Recovery is destructive consensus surgery, never an availability timeout. First
 confirm the other voters are permanently gone and fence them against returning.
@@ -324,10 +326,12 @@ volumes onto additional live nodes. Keep the original cluster identity, app and
 private passphrase. Fresh replacements use their own new identities and the
 normal authenticated learner-admission path.
 
-Only an operator-written request file in the node's configured `StateDir` can
-request recovery. In automatic deployments that directory is
+Recovery executes only from a request file in the node's configured `StateDir`.
+An operator may write it manually; signed opt-in automatic recovery may write
+the same request only after all guards below pass. In automatic deployments that directory is
 `/var/lib/drop-cluster/private`, not the mount root. There is no recovery network
-API, environment switch, command flag, discovery decision or automatic timeout.
+API or environment/flag that directly forces recovery. The signed policy command
+enables evaluation, not immediate action; no timeout alone authorizes it.
 `drop-cluster -status` and `-healthcheck` only query the authenticated running
 listener; they never open or recover the database. Writing a request while the
 coordinator runs has no effect until its next normal startup.
@@ -515,8 +519,9 @@ retired legacy identity without a recorded key cannot be safely re-pinned.
 Hashicorp Raft steps down on a higher-term replication response even from a
 learner. Such a returning node is therefore deferred until its term is no
 higher than the leader's, preserving its data and current leader authority.
-Pre-vote alone does not solve this case. Removal also cannot cancel an RPC
-already in flight; an immediate high-term restart can still complete that RPC.
+Pre-vote alone does not solve this case. The guarded transport below also
+filters late responses from removed members; admission still defers a higher-term
+return rather than adding it and stepping down the leader.
 
 ### Recovery generations and superseded histories
 
@@ -564,3 +569,153 @@ Without that explicit field, learner recovery remains refused without changing
 Raft state. All normal backups, identity checks, request consumption and the
 single-recovery-only rule still apply. A learner can lack acknowledged writes
 that reached voters; review the resulting metadata and security state.
+
+## Flux churn and guarded automatic recovery
+
+Node removal and later respawn is normal Flux operation. **Use six instances:
+five voters and one caught-up spare.** Membership scales from verified healthy,
+committed members, never from the discovery count or unadmitted candidates.
+
+| Healthy committed instances | Steady voters | Spares |
+|---|---|---|
+| 3 | 3 | 0 |
+| 4 | 3 | 1 |
+| 5 | 5 | 0 |
+| 6 | 5 | 1 |
+| 7 | 7 | 0 |
+| 9 | 7 | 2 |
+
+Seven voters cap quorum latency, replication work and configuration complexity.
+Five voters tolerate two failures while preserving normal Raft writes. Automatic
+mode's stale replacement grace is **two minutes** (explicit/manual manifests keep
+five minutes). Target windows restart with leadership; flapping restarts them.
+Upgrade every existing coordinator to this image before raising `instances`.
+FluxOS's `reinstallOldApplications` excludes `instances` from its spec comparison,
+so an instances-only change does not redeploy existing containers. Other changes
+can redeploy and destroy node-local volumes. Owner/description/expiry are also
+excluded by the inspected FluxOS code; do not infer safety for arbitrary changes.
+
+### Modes and operations
+
+The default effective mode is `observe`. Use the running image's binary as
+Drop's UID (65534), with its configured manifest and private passphrase available:
+
+```sh
+drop-cluster -auto-recovery status
+drop-cluster -auto-recovery observe
+drop-cluster -auto-recovery on
+drop-cluster -auto-recovery off
+```
+
+These commands do not start Raft or force recovery. They atomically write
+`/data/auto-recovery.json`, outside Nginx aliases, signed with an HKDF-derived
+HMAC key dedicated to this policy and cluster. The passphrase is never written
+there. The policy propagates through the replicated volume, not a spec update.
+Every evaluation reads it again. Missing, malformed, foreign-cluster or badly
+signed files mean observe and reset the recovery evidence window; explicitly
+write a valid signed `observe` policy to collect a full diagnostic window.
+Changing the policy restarts the window. `off` disables evaluation/self-fencing.
+
+Evaluation runs every fifteen seconds with bounded mTLS concurrency. Every
+condition below must hold continuously for thirty minutes; a failed sample,
+changed view/winner/policy, clock reversal or sample gap over forty-five seconds
+restarts the window:
+
+1. This node has history, no leader, and is in a newly fetched, validated,
+   nonempty self-including Flux list. A failed refresh cannot reuse a cached
+   successful snapshot as another sample.
+2. Too many voters from its latest local configuration are missing for the
+   remaining voters to form a majority. A missing voter must fail direct,
+   identity-checked mTLS probes on every sample. A live candidate also blocks it.
+3. Every listed address, including self, answers the new recovery-view route
+   with the same cluster/view hash, no leader, and recovery protocol version 1.
+   Unknown routes (404), unreachable listed nodes, duplicate identities, differing
+   views or newer/conflicting recovery generations block recovery. Mixed-version
+   clusters therefore cannot recover automatically.
+4. There is no pending recovery/reset or recovery done in the past twenty-four
+   hours. The selected winner is a surviving voter ahead of any learner, then
+   the greatest last-log (term, index), then the existing IP-hash rank. Only if
+   no voter survives can the most complete learner win. All peers use that rule.
+
+`observe` changes no stores or membership. Once per complete window it logs
+**"would recover now"**, with the winner, missing voters, log position and window
+start. `on` permits only the winner to repeat all checks immediately, close Raft,
+recheck its exact logical/disk position, and fsync the usual singleton request.
+It exits for restart; normal startup performs the pre-recovery copy and consumes
+that same request. A learner request explicitly includes `allowLearner`. The
+recovered node commits a new generation; old histories reset and re-enroll.
+A second recovery on that node within twenty-four hours is refused, including
+after a restart. Keep recovery `.done-*` files for audit and cooldown enforcement.
+
+This deliberately changes the old rule that discovery could never influence
+recovery. Discovery is now evidence only alongside committed configuration,
+log position, unanimous direct peer views, absent-voter probe failures, a long
+continuous window and a signed operator opt-in. It still cannot modify membership
+while Raft has authority. This does not prove global absence in an arbitrary
+network partition.
+
+### Self-fencing, restart behavior and remaining risks
+
+In `on` only, a node absent continuously from fresh nonempty lists naming another
+node for thirty minutes stops authoritative reads, writes and readiness. A
+failed/empty fetch cannot establish absence. An engaged fence stays until fresh
+relisting (or leaving `on`); relisting clears it immediately. In `observe` this
+only logs what would happen. Seeing two leaders logs an error and latches automatic
+recovery off for that process pending operator review/restart; enrollment never
+resets an old history when multiple leaders are observed.
+
+A dead Flux node can remain listed for about **125 minutes**; because an
+unreachable listed node blocks agreement, recovery can take that delay plus the
+thirty-minute evidence window and restart/enrollment time. It may wait longer,
+or indefinitely, when any guard disagrees. This is intentional.
+
+The image supervisor treats a coordinator exit as a container failure and stops
+its other children. In the inspected FluxOS source (`c8c73a1a0`), Docker's native
+restart policy is `no`; `appReconciler.getRestartPolicy` returns `always` and the
+reconciler restarts stopped containers with backoff, provided controller intent
+still says running. Thus a Flux-managed running instance is restarted by FluxOS,
+not guaranteed by Docker alone. A disabled/unavailable Flux controller can delay
+restart indefinitely. The fsynced request survives and is used on the next start.
+This code inspection is not a live Flux-network restart acceptance test.
+
+Recovery retains only the chosen history and implicitly commits its available
+uncommitted tail. Lost-tail writes, including security changes, may disappear;
+review ownership, sessions, grants, privacy and deletions after every recovery.
+A node cut off from both Flux and peers can keep running until the network heals;
+if it cannot fetch fresh lists, it cannot self-fence based on absence. A wrong
+recovery can roll back security state. Keep `/readyz` alerts, recent encrypted
+backups, off-node copies and the manual majority-loss runbook. Never run two
+independent recoveries or merge divergent histories automatically.
+
+### Raft transport history isolation
+
+Enrollment alone cannot fence an old voter: Raft reconnects directly, and a
+higher-term RPC can reach an FSM before rejoin runs. The transport therefore
+negotiates `flux-drop-raft/2/<clusterID>` and exchanges a bounded, length-prefixed
+history preface inside the already verified mTLS connection. The preface's node
+ID must match the certificate and its generation/lineage must match the local
+history. Certificate trust, application identity, destination pinning and
+cluster-bound ALPN checks remain in place. No port or environment change is needed.
+
+An admitted empty recipient binds to the sender's generation before receiving
+Raft bytes. That private promise is fsynced in `raft-generation.json` and retained
+while snapshots/logs catch up; the reset journal also records the approved epoch.
+Startup reconstructs known generations from its local Raft history, since a
+snapshot may predate the generation command. This prevents restart deadlocks and
+prevents the loading interval from accepting bytes from two histories. A loading
+transport promise differing from the applied generation appears as optional
+`transportRecovery` on recovery-view and blocks automatic recovery until caught up.
+
+The old version-1 Raft protocol remains usable for generation-zero rolling
+upgrades. Positive-generation histories require the new transport: upgrade all
+nodes before recovery, including fresh replacements. Unknown legacy histories
+cannot prove that they belong to a recovered generation. The new transport also
+discards late responses from members removed from a leader's configuration; it
+cannot use a returning node's higher term as permission to readmit it.
+
+A real TLS test deliberately keeps an old two-voter majority alive with a higher
+term while recovering the other voter. Neither its direct Raft replication nor
+a version-1 higher-term RPC can change the recovered leader or merge the old FSM.
+The old majority can be self-fenced through fresh Flux absence, while new nodes
+join the recovered history. Divergent leaders still require operator review;
+the transport never merges them automatically.

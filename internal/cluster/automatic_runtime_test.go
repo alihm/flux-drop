@@ -65,6 +65,7 @@ func TestAutomaticRuntimeStaggeredJoin(t *testing.T) {
 		c.Listen = c.Local.Address
 		c.StatusListen = netip.AddrPortFrom(address, AutoStatusPort).String()
 		r, err := startRuntimeWithSetup(ctx, c, func(ctx context.Context, _ *replica.Discovery) { <-ctx.Done() }, func(r *Runtime) {
+			isolateRecoveryDiscovery(r)
 			r.Observer.source = otherPeers{source, address}
 			r.Node.auto.source = source
 			// Drive genesis explicitly with synthetic time; all membership,

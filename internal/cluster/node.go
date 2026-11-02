@@ -28,6 +28,10 @@ import (
 const operationTimeout = 5 * time.Second
 
 type Node struct {
+	raftGuard         *raftGenerationGuard
+	resetRecovery     atomic.Pointer[recoveryGeneration]
+	selfFenced        atomic.Bool
+	recoveryManager   *recoveryManager
 	recoveryDetails   recoveryDetails
 	generationPending atomic.Bool
 	generationCancel  context.CancelFunc
@@ -185,6 +189,15 @@ func start(c Config, transport raft.Transport, tune func(*raft.Config)) (*Node, 
 		return nil, err
 	}
 	n := &Node{control: make(chan bool, 1), raft: r, state: fsm, store: store, snapshots: snapshots, transport: transport, config: c, started: time.Now(), localEpoch: rand.Text(), operations: make(chan struct{}, 64)}
+	if network, ok := transport.(*generationTransport); ok {
+		n.raftGuard, err = newRaftGenerationGuard(n)
+		if err != nil {
+			_ = r.Shutdown().Error()
+			return nil, err
+		}
+		network.stream.guard.Store(n.raftGuard)
+		close(network.stream.ready)
+	}
 	if c.AsyncContent {
 		n.async, err = newAsyncWriter(n)
 		if err != nil {
@@ -317,6 +330,9 @@ func (n *Node) wait(ctx context.Context, submit func() raft.Future) error {
 }
 
 func (n *Node) fence(ctx context.Context) error {
+	if n.selfFenced.Load() {
+		return ErrNotLeader
+	}
 	// Coalesce only in-flight confirmations, never reuse a completed fence for a
 	// new transaction. Each joined caller takes its own current snapshot after
 	// arrival, under the bounded same-term authority proof.
@@ -345,6 +361,9 @@ func (n *Node) fence(ctx context.Context) error {
 	})
 	select {
 	case r := <-result:
+		if n.selfFenced.Load() {
+			return ErrNotLeader
+		}
 		return r.Err
 	case <-ctx.Done():
 		return ctx.Err()
@@ -375,16 +394,26 @@ func (n *Node) Read(ctx context.Context, keys []string) (map[string]Record, erro
 // Commit may return an indeterminate result on timeout/leadership loss. Callers
 // must use checked/idempotent operations and re-read, never assume rollback.
 func (n *Node) Commit(ctx context.Context, t Transaction) error {
+	if n.selfFenced.Load() {
+		return ErrNotLeader
+	}
 	if t.Revision != 0 {
 		return ErrInvalid
 	}
 	if n.async != nil {
-		return n.async.commit(ctx, t)
+		err := n.async.commit(ctx, t)
+		if n.selfFenced.Load() {
+			return ErrNotLeader
+		}
+		return err
 	}
 	return n.commitRaft(ctx, t)
 }
 
 func (n *Node) commitRaft(ctx context.Context, t Transaction) error {
+	if n.selfFenced.Load() {
+		return ErrNotLeader
+	}
 	if err := validateTransaction(t); err != nil {
 		return err
 	}
@@ -400,6 +429,9 @@ func (n *Node) commitRaft(ctx context.Context, t Transaction) error {
 	var future raft.ApplyFuture
 	if err := n.wait(ctx, func() raft.Future { future = n.raft.Apply(data, operationTimeout); return future }); err != nil {
 		return err
+	}
+	if n.selfFenced.Load() {
+		return ErrNotLeader
 	}
 	if result := future.Response(); result != nil {
 		if err, ok := result.(error); ok {

@@ -23,7 +23,8 @@ type singletonRequest struct {
 	AllowLearner      bool   `json:"allowLearner,omitempty"`
 }
 
-// Only an operator-owned file authorizes recovery. O_NOFOLLOW and fstat bind
+// Only an owned request file authorizes the startup recovery operation.
+// A signed opt-in recovery worker may write that file after all guards pass. O_NOFOLLOW and fstat bind
 // validation to the opened inode, not to a potentially replaced pathname.
 func readOperatorRequest(path string, into any, fields ...string) (os.FileInfo, error) {
 	return readOperatorRequestOptional(path, into, fields, nil)
@@ -269,7 +270,8 @@ func recoverSingleton(c Config, rc *raft.Config, store interface {
 }, snapshots raft.SnapshotStore, transport raft.Transport, request *singletonRequest, info os.FileInfo, stamp string) error {
 	configuration := raft.Configuration{Servers: []raft.Server{{ID: raft.ServerID(c.Local.ID), Address: raft.ServerAddress(c.Local.raftAddress()), Suffrage: raft.Voter}}}
 	// RecoverCluster commits the survivor's entire log, including its uncommitted
-	// tail. Only permanent loss confirmation by an operator makes this acceptable.
+	// tail. Manual permanent-loss confirmation or the explicitly opted-in guarded
+	// recovery protocol authorizes this destructive consensus operation.
 	if err := raft.RecoverCluster(rc, newState(c.ClusterID), store, store, snapshots, transport, configuration); err != nil {
 		return fmt.Errorf("singleton recovery failed (request retained): %w", err)
 	}
@@ -277,7 +279,7 @@ func recoverSingleton(c Config, rc *raft.Config, store interface {
 		return err
 	}
 	term, _ := store.GetUint64([]byte("CurrentTerm"))
-	slog.Warn("operator majority-loss singleton recovery completed; surviving log tail implicitly committed", "node", c.Local.ID, "last_index", request.ExpectedLastIndex, "term", term)
+	slog.Warn("majority-loss singleton recovery completed; surviving log tail implicitly committed; lost tail of writes may be gone; review security metadata", "node", c.Local.ID, "last_index", request.ExpectedLastIndex, "term", term)
 	return nil
 }
 

@@ -89,7 +89,7 @@ func (w *asyncWriter) heartbeat() {
 			}
 			term := w.node.raft.CurrentTerm()
 			started := time.Now()
-			if w.node.raft.State() != raft.Leader {
+			if w.node.selfFenced.Load() || w.node.raft.State() != raft.Leader {
 				continue
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), authorityWindow)
@@ -108,7 +108,7 @@ func (w *asyncWriter) heartbeat() {
 }
 
 func (w *asyncWriter) authoritative() bool {
-	return w.node.raft.State() == raft.Leader && w.node.raft.CurrentTerm() == w.leaseTerm && authorityTimeValid(w.lease, time.Now())
+	return !w.node.selfFenced.Load() && w.node.raft.State() == raft.Leader && w.node.raft.CurrentTerm() == w.leaseTerm && authorityTimeValid(w.lease, time.Now())
 }
 
 // Both clocks must remain inside the proof window. This rejects wall-clock
@@ -124,7 +124,7 @@ func authorityTimeValid(deadline, now time.Time) bool {
 // Called with mu held. Establish a committed baseline exactly once per term;
 // subsequent reads use a short, periodically quorum-verified authority window.
 func (w *asyncWriter) ensure(ctx context.Context) error {
-	if w.node.raft.State() != raft.Leader {
+	if w.node.selfFenced.Load() || w.node.raft.State() != raft.Leader {
 		return ErrNotLeader
 	}
 	term := w.node.raft.CurrentTerm()

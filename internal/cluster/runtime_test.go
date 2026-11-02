@@ -118,7 +118,7 @@ func TestCoordinatorRuntimeLifecycle(t *testing.T) {
 	var runtimes []*Runtime
 	for _, c := range configs {
 		c.InitialVoters = manifest
-		r, err := startRuntime(ctx, c, func(ctx context.Context, _ *replica.Discovery) { <-ctx.Done() })
+		r, err := startRuntimeWithSetup(ctx, c, func(ctx context.Context, _ *replica.Discovery) { <-ctx.Done() }, isolateRecoveryDiscovery)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -302,4 +302,11 @@ func TestCoordinatorRuntimeLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = conn.Close()
+}
+
+// Constructor tests keep the real stores/listeners while explicitly injecting
+// discovery failure for the new observer, rather than contacting the Flux API.
+func isolateRecoveryDiscovery(r *Runtime) {
+	r.Node.recoveryManager.source = &staticPeers{fresh: false}
+	r.Node.recoveryManager.refresh = func(context.Context) error { return replica.ErrDiscovery }
 }

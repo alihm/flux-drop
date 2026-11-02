@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -35,15 +36,18 @@ func (a streamAddress) Network() string { return "tcp" }
 func (a streamAddress) String() string  { return string(a) }
 
 type tlsStream struct {
-	listener  net.Listener
-	material  TLSMaterial
-	local     Member
-	protocol  string
-	accepted  chan net.Conn
-	done      chan struct{}
-	slots     chan struct{}
-	workers   sync.WaitGroup
-	closeOnce sync.Once
+	listener       net.Listener
+	material       TLSMaterial
+	local          Member
+	protocol       string
+	legacyProtocol string
+	ready          chan struct{}
+	guard          atomic.Pointer[raftGenerationGuard]
+	accepted       chan net.Conn
+	done           chan struct{}
+	slots          chan struct{}
+	workers        sync.WaitGroup
+	closeOnce      sync.Once
 }
 
 func newStream(listener net.Listener, c Config, m TLSMaterial) (*tlsStream, error) {
@@ -60,7 +64,7 @@ func newStream(listener net.Listener, c Config, m TLSMaterial) (*tlsStream, erro
 			return nil, errors.New("TLS certificate does not match local Raft identity")
 		}
 	}
-	s := &tlsStream{listener: listener, material: m, local: c.Local, protocol: "flux-drop-raft/1/" + c.ClusterID, accepted: make(chan net.Conn), done: make(chan struct{}), slots: make(chan struct{}, 32)}
+	s := &tlsStream{listener: listener, material: m, local: c.Local, protocol: "flux-drop-raft/2/" + c.ClusterID, legacyProtocol: "flux-drop-raft/1/" + c.ClusterID, ready: make(chan struct{}), accepted: make(chan net.Conn), done: make(chan struct{}), slots: make(chan struct{}, 32)}
 	s.workers.Add(1)
 	go s.acceptLoop()
 	return s, nil
@@ -84,16 +88,21 @@ func (s *tlsStream) acceptLoop() {
 			defer s.workers.Done()
 			defer func() { <-s.slots }()
 			cfg := s.material.Server.Clone()
-			cfg.NextProtos = []string{s.protocol}
+			cfg.NextProtos = []string{s.protocol, s.legacyProtocol}
 			secure := tls.Server(conn, cfg)
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			if err := secure.HandshakeContext(ctx); err != nil || secure.ConnectionState().NegotiatedProtocol != s.protocol {
+			if err := secure.HandshakeContext(ctx); err != nil || (secure.ConnectionState().NegotiatedProtocol != s.protocol && secure.ConnectionState().NegotiatedProtocol != s.legacyProtocol) {
+				_ = secure.Close()
+				return
+			}
+			guarded, err := s.authorize(ctx, secure, replica.PeerIdentity(secure.ConnectionState().PeerCertificates[0], s.material.App), false)
+			if err != nil {
 				_ = secure.Close()
 				return
 			}
 			select {
-			case s.accepted <- secure:
+			case s.accepted <- guarded:
 			case <-s.done:
 				_ = secure.Close()
 			}
@@ -126,19 +135,28 @@ func (s *tlsStream) Dial(address raft.ServerAddress, timeout time.Duration) (net
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cfg := s.material.Client.Clone()
-	cfg.NextProtos = []string{s.protocol}
+	cfg.NextProtos = []string{s.protocol, s.legacyProtocol}
 	verify := cfg.VerifyConnection
 	cfg.VerifyConnection = func(state tls.ConnectionState) error {
 		if err := verify(state); err != nil {
 			return err
 		}
-		if state.NegotiatedProtocol != s.protocol || len(state.PeerCertificates) == 0 || replica.PeerIdentity(state.PeerCertificates[0], s.material.App) != member.ID {
+		if (state.NegotiatedProtocol != s.protocol && state.NegotiatedProtocol != s.legacyProtocol) || len(state.PeerCertificates) == 0 || replica.PeerIdentity(state.PeerCertificates[0], s.material.App) != member.ID {
 			return errors.New("Raft destination identity or cluster mismatch")
 		}
 		return nil
 	}
 	dialer := tls.Dialer{NetDialer: &net.Dialer{Timeout: timeout}, Config: cfg}
-	return dialer.DialContext(ctx, "tcp", member.Address)
+	conn, err := dialer.DialContext(ctx, "tcp", member.Address)
+	if err != nil {
+		return nil, err
+	}
+	guarded, err := s.authorize(ctx, conn.(*tls.Conn), member.ID, true)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return guarded, nil
 }
 
 // StartTLS is the only production node constructor. Both raw Raft traffic and
@@ -156,11 +174,64 @@ func StartTLS(c Config, listen string, material TLSMaterial) (*Node, error) {
 		_ = listener.Close()
 		return nil, err
 	}
-	transport := raft.NewNetworkTransport(stream, 3, 5*time.Second, io.Discard)
+	transport := newRaftTransport(stream)
 	node, err := start(c, transport, nil)
 	if err != nil {
 		_ = transport.Close()
 		return nil, err
 	}
 	return node, nil
+}
+
+func newRaftTransport(stream *tlsStream) *generationTransport {
+	return &generationTransport{NetworkTransport: raft.NewNetworkTransport(stream, 3, 5*time.Second, io.Discard), stream: stream}
+}
+func (s *tlsStream) authorize(ctx context.Context, conn *tls.Conn, peerID string, outbound bool) (net.Conn, error) {
+	select {
+	case <-s.ready:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-s.done:
+		return nil, net.ErrClosed
+	}
+	guard := s.guard.Load()
+	if guard == nil {
+		return nil, ErrNotLeader
+	}
+	var expected recoveryGeneration
+	if conn.ConnectionState().NegotiatedProtocol == s.legacyProtocol {
+		current, err := guard.effective()
+		if err != nil || current.Generation != 0 || guard.node.generationPending.Load() {
+			return nil, ErrNotLeader
+		}
+		expected = current
+	} else {
+		own, err := guard.hello()
+		if err != nil {
+			return nil, err
+		}
+		if deadline, ok := ctx.Deadline(); ok {
+			conn.SetDeadline(deadline)
+		}
+		if err := writeRaftHello(conn, own); err != nil {
+			return nil, err
+		}
+		peer, err := readRaftHello(conn)
+		if err != nil {
+			return nil, err
+		}
+		if peer.NodeID != peerID {
+			return nil, ErrInvalid
+		}
+		expected, err = guard.authorize(peer)
+		if err != nil {
+			return nil, err
+		}
+		conn.SetDeadline(time.Time{})
+	}
+	memberID := ""
+	if outbound {
+		memberID = peerID
+	}
+	return &generationConn{Conn: conn, guard: guard, expected: expected, memberID: memberID}, nil
 }

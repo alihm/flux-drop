@@ -455,10 +455,24 @@ func (e *enrollment) request(ctx context.Context) error {
 	if !fresh {
 		return ErrNotLeader
 	}
+	leaders := 0
+	for _, p := range peers {
+		if p.Status.Role == "Leader" {
+			leaders++
+		}
+	}
+	if leaders != 1 {
+		return ErrNotLeader
+	}
 	data, _ := json.Marshal(e.node.config.Local)
 	for _, p := range peers {
 		if p.Status.Role != "Leader" {
 			continue
+		}
+		if e.node.raft.LastIndex() == 0 && e.node.raftGuard != nil {
+			if err := e.node.raftGuard.prepareEnrollment(ctx, e, p); err != nil {
+				return err
+			}
 		}
 		if e.node.raft.LastIndex() > 0 {
 			reply, err := e.exchangeRejoin(ctx, p)
@@ -467,6 +481,8 @@ func (e *enrollment) request(ctx context.Context) error {
 			}
 			if reply.Result == "reset_required" {
 				if e.mayReset(ctx) && e.node.controlPending.CompareAndSwap(false, true) {
+					copy := reply.Recovery
+					e.node.resetRecovery.Store(&copy)
 					e.node.control <- true
 				}
 				return ErrNotLeader

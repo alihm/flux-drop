@@ -8,7 +8,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"fmt"
-	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -89,7 +88,7 @@ func TestTLSClusterElectionAndPinnedIdentity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		tr := raft.NewNetworkTransport(stream, 2, time.Second, io.Discard)
+		tr := newRaftTransport(stream)
 		n, err := start(c, tr, tuneTest)
 		if err != nil {
 			t.Fatal(err)

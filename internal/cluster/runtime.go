@@ -307,6 +307,12 @@ func startRuntimeWithSetup(parent context.Context, c RuntimeConfig, runDiscovery
 			return nil, err
 		}
 	}
+	recoverySource, err := replica.NewDiscovery(c.App, c.StatusPort, nil)
+	if err != nil {
+		_ = node.Close()
+		return nil, err
+	}
+	node.recoveryManager = &recoveryManager{node: node, observer: observer, source: recoverySource, refresh: recoverySource.Refresh, now: time.Now, window: autoRecoveryWindow, statusPort: c.StatusPort}
 	listener, err := net.Listen("tcp", c.StatusListen)
 	if err != nil {
 		_ = node.Close()
@@ -318,23 +324,53 @@ func startRuntimeWithSetup(parent context.Context, c RuntimeConfig, runDiscovery
 	if setup != nil {
 		setup(r)
 	}
-	r.workers.Add(1)
+	r.workers.Add(2)
+	go func() { defer r.workers.Done(); node.recoveryManager.run(ctx) }()
 	go func() {
 		defer r.workers.Done()
-		select {
-		case <-ctx.Done():
-			return
-		case <-node.control:
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case reset := <-node.control:
+				bounded, cancel := context.WithTimeout(ctx, 25*time.Second)
+				if reset {
+					if node.enrollment == nil || !node.enrollment.mayReset(bounded) {
+						node.controlPending.Store(false)
+						cancel()
+						continue
+					}
+					err := node.Close()
+					if err == nil {
+						target := node.resetRecovery.Load()
+						if target == nil {
+							err = ErrInvalid
+						} else {
+							err = archiveSuperseded(node.config, *target)
+						}
+					}
+					if err == nil {
+						err = errors.New("superseded Raft history archived; container restart required")
+					}
+					cancel()
+					select {
+					case r.errors <- err:
+					case <-ctx.Done():
+					}
+					return
+				}
+				stopped, err := node.recoveryManager.performRecovery(bounded)
+				cancel()
+				if stopped {
+					select {
+					case r.errors <- err:
+					case <-ctx.Done():
+					}
+					return
+				}
+				node.controlPending.Store(false)
+			}
 		}
-		if err := node.Close(); err != nil {
-			r.errors <- err
-			return
-		}
-		if err := archiveSuperseded(node.config); err != nil {
-			r.errors <- err
-			return
-		}
-		r.errors <- errors.New("superseded Raft history archived; container restart required")
 	}()
 	r.workers.Add(3)
 	go func() { defer r.workers.Done(); runDiscovery(ctx, discovery) }()

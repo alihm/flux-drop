@@ -84,10 +84,8 @@ func TestRetiredHigherTermWaitsWithoutDisruptingLeader(t *testing.T) {
 		}
 		return true
 	})
-	// Hashicorp cannot cancel an already-started replication RPC on removal.
-	// Let the production transport's five-second RPC bound drain before testing
-	// admission of a node that has spent a long interval offline.
-	time.Sleep(6 * time.Second)
+	// No drain sleep: the transport must reject an old replication response
+	// after the destination has been removed from the current membership.
 	term := leader.node.raft.CurrentTerm()
 	store, err := raftboltdb.New(raftboltdb.Options{Path: filepath.Join(spare.config.StateDir, "raft.db")})
 	if err != nil {

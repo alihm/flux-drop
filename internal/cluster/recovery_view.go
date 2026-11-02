@@ -18,17 +18,18 @@ const recoveryViewPath = "/_drop_cluster/recovery-view"
 // Deliberately separate from Status: old peers decode Status strictly. Protocol
 // zero advertises observation only; automated recovery requires protocol one.
 type RecoveryView struct {
-	NodeID            string             `json:"nodeID"`
-	ClusterID         string             `json:"clusterID"`
-	LastLogIndex      uint64             `json:"lastLogIndex"`
-	LastLogTerm       uint64             `json:"lastLogTerm"`
-	HasLeader         bool               `json:"hasLeader"`
-	MembershipRole    string             `json:"membershipRole"`
-	DiscoveryViewHash string             `json:"discoveryViewHash"`
-	EvaluationState   string             `json:"evaluationState"`
-	RecoveryMode      string             `json:"recoveryMode"`
-	Recovery          recoveryGeneration `json:"recovery"`
-	Protocol          int                `json:"protocol"`
+	TransportRecovery *recoveryGeneration `json:"transportRecovery,omitempty"`
+	NodeID            string              `json:"nodeID"`
+	ClusterID         string              `json:"clusterID"`
+	LastLogIndex      uint64              `json:"lastLogIndex"`
+	LastLogTerm       uint64              `json:"lastLogTerm"`
+	HasLeader         bool                `json:"hasLeader"`
+	MembershipRole    string              `json:"membershipRole"`
+	DiscoveryViewHash string              `json:"discoveryViewHash"`
+	EvaluationState   string              `json:"evaluationState"`
+	RecoveryMode      string              `json:"recoveryMode"`
+	Recovery          recoveryGeneration  `json:"recovery"`
+	Protocol          int                 `json:"protocol"`
 }
 
 type recoveryDetails struct {
@@ -83,6 +84,18 @@ func (n *Node) RecoveryView() (RecoveryView, error) {
 	if view.DiscoveryViewHash == "" && n.auto != nil {
 		view.DiscoveryViewHash = n.auto.statusView()
 	}
+	if n.raftGuard != nil {
+		effective, err := n.raftGuard.effective()
+		if err != nil {
+			return view, err
+		}
+		if effective != view.Recovery {
+			view.TransportRecovery = &effective
+		}
+	}
+	if n.generationPending.Load() {
+		view.EvaluationState = "generation-pending"
+	}
 	return view, nil
 }
 
@@ -113,6 +126,9 @@ func (o *Observer) probeRecoveryView(ctx context.Context, address netip.AddrPort
 	switch view.RecoveryMode {
 	case "off", "observe", "on":
 	default:
+		return view, ErrInvalid
+	}
+	if view.TransportRecovery != nil && !validRecoveryGeneration(*view.TransportRecovery) {
 		return view, ErrInvalid
 	}
 	if view.Recovery.Generation == 0 && view.Recovery.Lineage != "" || view.Recovery.Generation > 0 && len(view.Recovery.Lineage) != 32 {

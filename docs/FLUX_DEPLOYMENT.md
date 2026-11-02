@@ -2,7 +2,7 @@
 
 This applies to the new source/local image, not previously published Docker Hub
 tags. One component runs Nginx, the application and the coordinator. Deploy
-**three replicas** on FluxOS 8.19.0 or later.
+**six instances** (five voters and one spare) on FluxOS 8.19.0 or later.
 
 ## Configuration
 
@@ -93,7 +93,7 @@ Initial discovery must include this node and remain stable for 30 seconds. With
 one listed node it may initialize coordination. With multiple nodes, the lowest
 IP-hash candidate requires every listed peer to be reachable, authenticated,
 uninitialized and reporting the identical discovery view. Later nodes enroll as
-learners, catch up, and are promoted toward three voters. Security/session writes
+learners, catch up, and are promoted toward a dynamic odd target (3, 5 or 7). Security/session writes
 wait for another voter during singleton startup. With three voters, one removal
 or replacement leaves a two-voter majority able to elect a leader and admit the
 new node; with two voters, losing either one removes quorum.
@@ -154,9 +154,9 @@ or reviewed migration, and do not mix old and new protocol images.
 
 A Flux **specification update can replace instances and destroy their `ml:state`
 volumes**. Persistent on one host does not mean replicated or preserved after
-host replacement. Before every update, verify three healthy voters, working
+host replacement. Before every update, verify all current voters healthy, working
 application `/readyz`, and a recent successful encrypted metadata backup. Update
-one voter at a time and wait for all three healthy voters again. Keep a protected
+one voter at a time and wait for the healthy voter target again. Keep a protected
 off-node copy of state, replicated data and the private passphrase.
 
 The leader backs up committed metadata every 15 minutes when it changed, keeping
@@ -173,7 +173,8 @@ checks liveness and authenticated listener identity, so a leaderless candidate
 can remain healthy for days. Authenticated status / `drop-cluster -status` now
 also report voter/learner counts and last-contact age. Leader loss over two
 minutes logs an error naming unreachable voters; an empty node waiting over five
-minutes for admission logs a warning. These observations never initiate recovery.
+minutes for admission logs a warning. These diagnostics alone never initiate recovery; signed opt-in guarded recovery
+is described below.
 
 Use [CLUSTER.md: Majority-loss recovery](CLUSTER.md#majority-loss-recovery) for the
 complete reviewed procedure. Fence the permanently lost voters first, select
@@ -200,3 +201,56 @@ backup on multiple nodes, or copy a live node's identity to a replacement. Fresh
 replacements enroll through the unchanged mTLS/credential learner flow. No
 recovery environment variable, flag, timeout, discovery result or API exists;
 `-status` and `-healthcheck` never open Raft state or execute requests.
+
+## Normal node churn and guarded recovery
+
+Use six healthy committed instances for five voters and one spare. The steady
+instance-to-voter counts are 3→3, 4→3, 5→5, 6→5, 7→7 and 9→7; voters stop at seven
+to bound quorum/replication cost. A higher target needs five minutes of verified
+health; lowering needs fifteen minutes, removes failed voters only, and respects
+the stored floor of three or five. Automatic-mode replacement grace is two
+minutes. Returning same-key retirees rejoin as learners; higher-term returns wait
+rather than knowingly stepping down the current leader.
+
+Upgrade all existing instances before raising `instances`. In the inspected
+FluxOS source, an instances-only change is excluded from the redeploy comparison
+and does not replace existing containers. Other spec changes can, so retain the
+pre-update health, backup and off-node-copy checks above.
+
+Read [the complete automatic-recovery conditions](CLUSTER.md#flux-churn-and-guarded-automatic-recovery)
+before opting in. Default/missing/invalid policy means `observe`. Use
+`drop-cluster -auto-recovery observe|on|off|status` as UID 65534 with the existing
+private passphrase available. It signs `/data/auto-recovery.json` without changing
+the Flux spec. No secret is stored in that file, and it is outside Nginx aliases.
+An explicit valid signed observe policy produces "would recover now" logs after
+a continuous thirty-minute agreement window. Mixed versions, stale or failed
+Flux responses, missing self, any reachable missing voter, any unreachable
+listed node, leaders, different peer views or newer histories prevent recovery.
+Only a deterministic most-complete surviving voter (or learner if no voter
+survives) can act. `on` repeats the guards, writes the ordinary startup request
+and exits; old histories are archived and re-enroll through generation checks.
+A node absent continuously from fresh nonempty discovery can self-fence only in
+`on`. Failed/empty responses never establish absence. Relisting clears the fence.
+
+A dead instance may remain listed about 125 minutes; add the thirty-minute window
+and restart/enrollment time. Recovery may wait indefinitely when evidence does
+not agree. The image exits when its coordinator exits. FluxOS's reconciler
+restarts a controller-authorized running app with backoff (`always`); Docker's
+native policy in the inspected FluxOS is `no`. If Flux's controller is unavailable
+or has stopped the app, an operator may need to restart it. The request remains
+durable. Live Flux-network restart timing was not verified here.
+
+Keep readiness alerts and the manual runbook even with `on`. A node disconnected
+from Flux and peers cannot prove absence and can keep running until networking
+heals. Forced recovery may lose tail writes or roll back security changes; review
+it and retain the original archives. Never start two independent recoveries.
+If only a caught-up learner survives, manual recovery can include
+`"allowLearner": true`; use it only after confirming no voter survives.
+
+The current image also checks history generations on Raft connections, without
+changing certificate identities or ports. All nodes must support the new Raft
+preface before recovery: legacy version-1 peers can coexist only in generation
+zero. Old histories cannot reconnect directly and overwrite a recovered FSM.
+Private `raft-generation.json` and the reset journal survive restart so a node
+loading a snapshot stays bound to the approved history. A loading node reports
+`transportRecovery` on recovery-view until its generation command applies.

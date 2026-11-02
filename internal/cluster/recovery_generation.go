@@ -112,6 +112,13 @@ func (n *Node) finishRecoveryGeneration(ctx context.Context, intent *generationI
 		// from reusing a known generation. Time is an additional floor, not proof of
 		// history; random lineage makes independently recovered histories unequal.
 		highest := current.Generation
+		if n.raftGuard != nil {
+			known, err := n.raftGuard.effective()
+			if err != nil {
+				return err
+			}
+			highest = max(highest, known.Generation)
+		}
 		var watermark generationIntent
 		_, err := readOperatorRequest(filepath.Join(n.config.ContentDir, "recovery-generation.json"), &watermark, "clusterID", "nodeID", "recovery")
 		if err == nil {
@@ -139,6 +146,11 @@ func (n *Node) finishRecoveryGeneration(ctx context.Context, intent *generationI
 		row := n.state.read([]string{recoveryGenerationKey})[recoveryGenerationKey]
 		raw, _ := json.Marshal(intent.Recovery)
 		if err := n.Commit(ctx, Transaction{Schema: 1, Checks: []Check{{Key: recoveryGenerationKey, Version: row.Version}}, Writes: []Write{{Key: recoveryGenerationKey, Value: raw}}}); err != nil {
+			return err
+		}
+	}
+	if n.raftGuard != nil {
+		if _, err := n.raftGuard.effective(); err != nil {
 			return err
 		}
 	}

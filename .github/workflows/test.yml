@@ -71,7 +71,7 @@ jobs:
       - run: go vet ./...
       - run: go build -o bin/drop ./cmd/drop
       - run: go build -o bin/drop-cluster ./cmd/drop-cluster
-      - run: go test -race ./internal/cluster -count=5
+      - run: go test -race ./internal/cluster -count=5 -timeout=45m
 
   firestore-transactions:
     runs-on: ubuntu-24.04
