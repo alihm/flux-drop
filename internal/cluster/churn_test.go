@@ -27,6 +27,7 @@ type churnNode struct {
 	enrollment *enrollment
 }
 type churnCluster struct {
+	async            bool
 	t                *testing.T
 	nodes            []*churnNode
 	source           *staticPeers
@@ -36,8 +37,9 @@ type churnCluster struct {
 	credential       string
 }
 
-func newChurnCluster(t *testing.T) *churnCluster {
-	h := &churnCluster{t: t, source: &staticPeers{fresh: true}, issue: materials(t), now: time.Now(), port: uint16(recoveryPort(t)), statusPort: uint16(recoveryPort(t))}
+func newChurnCluster(t *testing.T) *churnCluster { return newChurnClusterWithAsync(t, true) }
+func newChurnClusterWithAsync(t *testing.T, async bool) *churnCluster {
+	h := &churnCluster{async: async, t: t, source: &staticPeers{fresh: true}, issue: materials(t), now: time.Now(), port: uint16(recoveryPort(t)), statusPort: uint16(recoveryPort(t))}
 	// Register cleanup before starting listeners, including partially failed starts.
 	t.Cleanup(func() {
 		for _, n := range h.nodes {
@@ -69,7 +71,7 @@ func newChurnCluster(t *testing.T) *churnCluster {
 	for _, m := range initial {
 		root := t.TempDir()
 		os.Chmod(root, 0700)
-		c := Config{ClusterID: testClusterID, Local: m, StateDir: root, ContentDir: t.TempDir(), InitialVoters: initial, AsyncContent: true}
+		c := Config{ClusterID: testClusterID, Local: m, StateDir: root, ContentDir: t.TempDir(), InitialVoters: initial, AsyncContent: h.async}
 		h.nodes = append(h.nodes, &churnNode{config: c, material: h.issue(m.ID)})
 		a := netip.MustParseAddrPort(m.Address)
 		h.source.addresses = append(h.source.addresses, netip.AddrPortFrom(a.Addr(), h.statusPort))
@@ -92,7 +94,7 @@ func (h *churnCluster) add(initial []Member) *churnNode {
 	m := h.member(len(h.nodes))
 	root := h.t.TempDir()
 	os.Chmod(root, 0700)
-	c := Config{ClusterID: testClusterID, Local: m, StateDir: root, ContentDir: h.t.TempDir(), InitialVoters: initial, AsyncContent: true}
+	c := Config{ClusterID: testClusterID, Local: m, StateDir: root, ContentDir: h.t.TempDir(), InitialVoters: initial, AsyncContent: h.async}
 	n := &churnNode{config: c, material: h.issue(m.ID)}
 	h.nodes = append(h.nodes, n)
 	h.start(n)

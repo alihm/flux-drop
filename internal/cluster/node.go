@@ -28,16 +28,18 @@ import (
 const operationTimeout = 5 * time.Second
 
 type Node struct {
-	raftGuard         *raftGenerationGuard
-	resetRecovery     atomic.Pointer[recoveryGeneration]
-	selfFenced        atomic.Bool
-	recoveryManager   *recoveryManager
-	recoveryDetails   recoveryDetails
-	generationPending atomic.Bool
-	generationCancel  context.CancelFunc
-	generationDone    chan struct{}
-	control           chan bool
-	controlPending    atomic.Bool
+	fencedTransferCancel context.CancelFunc
+	fencedTransferDone   chan struct{}
+	raftGuard            *raftGenerationGuard
+	resetRecovery        atomic.Pointer[recoveryGeneration]
+	selfFenced           atomic.Bool
+	recoveryManager      *recoveryManager
+	recoveryDetails      recoveryDetails
+	generationPending    atomic.Bool
+	generationCancel     context.CancelFunc
+	generationDone       chan struct{}
+	control              chan bool
+	controlPending       atomic.Bool
 
 	backupCancel      context.CancelFunc
 	backupDone        chan struct{}
@@ -222,6 +224,7 @@ func start(c Config, transport raft.Transport, tune func(*raft.Config)) (*Node, 
 		_ = n.Close()
 		return nil, err
 	}
+	n.startFencedTransfers()
 	n.startAnalytics()
 	n.startMetadataBackups()
 	ok = true
@@ -275,6 +278,10 @@ func bindIdentity(c Config, hasState bool) error {
 
 func (n *Node) Close() error {
 	n.closeOnce.Do(func() {
+		if n.fencedTransferCancel != nil {
+			n.fencedTransferCancel()
+			<-n.fencedTransferDone
+		}
 		if n.generationCancel != nil {
 			n.generationCancel()
 			<-n.generationDone

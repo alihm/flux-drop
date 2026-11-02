@@ -80,7 +80,7 @@ func (w *asyncWriter) heartbeat() {
 			w.mu.Lock()
 			failed := w.failed
 			w.mu.Unlock()
-			if failed && w.node.raft.State() == raft.Leader && time.Since(lastTransfer) > time.Second {
+			if (failed || w.node.selfFenced.Load()) && w.node.raft.State() == raft.Leader && time.Since(lastTransfer) > time.Second {
 				lastTransfer = time.Now()
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				_ = w.node.wait(ctx, func() raft.Future { return w.node.raft.LeadershipTransfer() })

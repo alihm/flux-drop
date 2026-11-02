@@ -660,7 +660,9 @@ In `on` only, a node absent continuously from fresh nonempty lists naming anothe
 node for thirty minutes stops authoritative reads, writes and readiness. A
 failed/empty fetch cannot establish absence. An engaged fence stays until fresh
 relisting (or leaving `on`); relisting clears it immediately. In `observe` this
-only logs what would happen. Seeing two leaders logs an error and latches automatic
+only logs what would happen. A self-fenced leader repeatedly attempts leadership
+transfer, at most once per second, so a healthy majority can restore writes.
+Handoff never clears the fence; only relisting or leaving `on` does. Seeing two leaders logs an error and latches automatic
 recovery off for that process pending operator review/restart; enrollment never
 resets an old history when multiple leaders are observed.
 
