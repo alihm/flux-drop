@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net"
 	"net/http"
 	"net/netip"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/raft"
 	"github.com/runonflux/flux-drop/internal/analytics"
 	"github.com/runonflux/flux-drop/internal/metadata"
 	"github.com/runonflux/flux-drop/internal/project"
@@ -81,14 +83,18 @@ func TestCoordinatorRuntimeLifecycle(t *testing.T) {
 	issue := materials(t)
 	configs := make([]RuntimeConfig, 3)
 	var manifest []Member
+	// Match production: distinct IPs and common ports. A leader hint names a
+	// member IP; overriding its status port with the initial leader's port on
+	// one shared IP makes later elections route to the wrong TLS identity.
+	raftReservation, statusReservation := listener(t), listener(t)
+	raftPort := netip.MustParseAddrPort(raftReservation.Addr().String()).Port()
+	statusPort := netip.MustParseAddrPort(statusReservation.Addr().String()).Port()
+	_ = raftReservation.Close()
+	_ = statusReservation.Close()
 	for i, id := range []string{"one", "two", "three"} {
-		// Reserve then release loopback ports for the real runtime listeners.
-		raftListener := listener(t)
-		statusListener := listener(t)
-		address := raftListener.Addr().String()
-		statusAddress := statusListener.Addr().String()
-		_ = raftListener.Close()
-		_ = statusListener.Close()
+		ip := netip.MustParseAddr("127.0.0." + fmtInt(61+i))
+		address := netip.AddrPortFrom(ip, raftPort).String()
+		statusAddress := netip.AddrPortFrom(ip, statusPort).String()
 		root := t.TempDir()
 		_ = os.Chmod(root, 0700)
 		secrets := t.TempDir()
@@ -110,7 +116,7 @@ func TestCoordinatorRuntimeLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		statusIP, _ := netip.ParseAddrPort(statusAddress)
-		configs[i] = RuntimeConfig{App: "testapp", ClusterID: testClusterID, Local: Member{ID: id, Address: address}, StateDir: root, ContentDir: t.TempDir(), Listen: address, StatusListen: statusAddress, StatusPort: statusIP.Port(), SelfIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Certificate: certPath, Key: keyPath, CA: caPath}
+		configs[i] = RuntimeConfig{App: "testapp", ClusterID: testClusterID, Local: Member{ID: id, Address: address}, StateDir: root, ContentDir: t.TempDir(), Listen: address, StatusListen: statusAddress, StatusPort: statusIP.Port(), SelfIPs: []netip.Addr{ip}, Certificate: certPath, Key: keyPath, CA: caPath}
 		manifest = append(manifest, configs[i].Local)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -147,10 +153,6 @@ func TestCoordinatorRuntimeLifecycle(t *testing.T) {
 		return false
 	})
 	for i, c := range configs {
-		// All three processes run on loopback with different test ports; production
-		// nodes use distinct IPs and the same externally mapped status port.
-		leaderStatus := netip.MustParseAddrPort(configs[leader].StatusListen)
-		c.StatusPort = leaderStatus.Port()
 		metadataClient, err := NewClient(c)
 		if err != nil {
 			t.Fatal(err)
@@ -158,27 +160,81 @@ func TestCoordinatorRuntimeLifecycle(t *testing.T) {
 		t.Cleanup(metadataClient.Close)
 		store := &metadata.Store{Backend: metadataClient}
 		sessions := &session.Service{Store: &session.RaftStore{Store: store, CreationsPerMinute: 60}}
-		token, view, err := sessions.Create(ctx)
-		if err != nil {
-			t.Fatal("session through local coordinator/leader", err)
-		}
+		var token string
+		var view session.View
+		// Failed fixture allocations are disposable; publish only with the
+		// final successfully acknowledged session, never an uncertain token.
+		awaitRuntimeSetup(t, "session through local coordinator/leader", func() error {
+			var err error
+			token, view, err = sessions.Create(ctx)
+			return err
+		})
 		actor, err := project.ActorFrom(token, view)
 		if err != nil {
 			t.Fatal(err)
 		}
 		repo := &project.RaftRepository{Store: store}
+		// The session request cached a leader. Prove that authenticated routing
+		// follows a real leadership transfer without changing client config.
+		metadataClient.mu.Lock()
+		initialLeader := metadataClient.leaderID
+		metadataClient.mu.Unlock()
+		leader = -1
+		for j, candidate := range configs {
+			if candidate.Local.ID == initialLeader {
+				leader = j
+			}
+		}
+		if leader < 0 {
+			t.Fatal("session request did not cache an admitted leader", initialLeader)
+		}
+		next := (leader + 1) % len(runtimes)
+		awaitFor(t, 15*time.Second, func() bool {
+			if runtimes[next].Node.raft.State() == raft.Leader && runtimes[next].Node.Ready(ctx) == nil {
+				return true
+			}
+			for _, current := range runtimes {
+				if current.Node.raft.State() != raft.Leader || current.Node.Ready(ctx) != nil {
+					continue
+				}
+				err := current.Node.raft.LeadershipTransferToServer(raft.ServerID(configs[next].Local.ID), raft.ServerAddress(configs[next].Local.raftAddress())).Error()
+				if err != nil && !errors.Is(err, raft.ErrNotLeader) && !errors.Is(err, raft.ErrLeadershipLost) {
+					t.Fatal("transfer cached leader", err)
+				}
+				break
+			}
+			return false
+		})
+		leader = next
 		digest := strings.Repeat(string(rune('a'+i)), 64)
-		prepared, err := repo.Reserve(ctx, actor, project.Reservation{Key: "rpc_operation", Name: "rpc", Digest: digest, Bytes: 10})
-		if err != nil {
-			t.Fatal("reserve through leader", err)
+		var prepared project.Prepared
+		awaitRuntimeSetup(t, "reserve through leader", func() error {
+			var err error
+			prepared, err = repo.Reserve(ctx, actor, project.Reservation{Key: "rpc_operation", Name: "rpc", Digest: digest, Bytes: 10})
+			return err
+		})
+		var published project.Project
+		awaitRuntimeSetup(t, "activate through leader", func() error {
+			var err error
+			published, err = repo.Activate(ctx, actor, prepared.Operation.ID)
+			return err
+		})
+		metadataClient.mu.Lock()
+		followed := metadataClient.leaderID == configs[leader].Local.ID
+		metadataClient.mu.Unlock()
+		if !followed {
+			t.Fatal("client did not follow the new leader")
 		}
-		published, err := repo.Activate(ctx, actor, prepared.Operation.ID)
-		if err != nil {
-			t.Fatal("activate through leader", err)
-		}
-		if owned, e := repo.GetOwned(ctx, actor, published.ID); e != nil || owned.Owner.ID != actor.AnonymousID || owned.ChargedBytes == 0 {
-			t.Fatal("durable private fields", owned, e)
-		}
+		awaitRuntimeSetup(t, "read durable private fields", func() error {
+			owned, e := repo.GetOwned(ctx, actor, published.ID)
+			if e != nil {
+				return e
+			}
+			if owned.Owner.ID != actor.AnonymousID || owned.ChargedBytes == 0 {
+				t.Fatal("durable private fields", owned)
+			}
+			return nil
+		})
 
 		// Real mTLS local reads target this coordinator even when the client has
 		// already cached another leader. They never poison management routing.
@@ -222,16 +278,18 @@ func TestCoordinatorRuntimeLifecycle(t *testing.T) {
 		var hourly [24]uint64
 		hourly[now.Hour()] = uint64(i + 1)
 		snapshot := analytics.Snapshot{Node: c.Local.ID, Producer: strings.Repeat("a", 32), Day: analytics.Day(now).Format("2006-01-02"), Shard: strings.IndexByte("0123456789abcdef", published.ID[0]), Sequence: 1, UpdatedAt: now, Projects: map[string][24]uint64{published.ID: hourly}}
-		if e := metadataClient.SubmitPageViews(ctx, snapshot); e != nil {
-			t.Fatal("authenticated analytics submission", e)
-		}
-		if e := metadataClient.SubmitPageViews(ctx, snapshot); e != nil {
-			t.Fatal("analytics retry", e)
-		}
-		result, e := metadataClient.PageViews(ctx, analytics.Query{ProjectID: published.ID, From: analytics.Day(now), To: analytics.Day(now).Add(24 * time.Hour), Interval: "hour"})
-		if e != nil || result.PageViews != uint64(i+1) {
-			t.Fatal("analytics RPC result", result, e)
-		}
+		awaitRuntimeSetup(t, "authenticated analytics submission", func() error { return metadataClient.SubmitPageViews(ctx, snapshot) })
+		awaitRuntimeSetup(t, "analytics retry", func() error { return metadataClient.SubmitPageViews(ctx, snapshot) })
+		awaitRuntimeSetup(t, "query analytics", func() error {
+			result, e := metadataClient.PageViews(ctx, analytics.Query{ProjectID: published.ID, From: analytics.Day(now), To: analytics.Day(now).Add(24 * time.Hour), Interval: "hour"})
+			if e != nil {
+				return e
+			}
+			if result.PageViews != uint64(i+1) {
+				t.Fatal("analytics RPC result", result)
+			}
+			return nil
+		})
 		snapshot.Node = "impersonated"
 		if _, e := metadataClient.call(ctx, rpcRequest{Method: "analytics_put", Analytics: &snapshot}); e != ErrInvalid {
 			t.Fatal("server accepted analytics node spoof", e)
@@ -239,12 +297,34 @@ func TestCoordinatorRuntimeLifecycle(t *testing.T) {
 		if e := metadataClient.SubmitPageViews(ctx, snapshot); e != ErrInvalid {
 			t.Fatal("analytics node spoof accepted", e)
 		}
-		if _, _, err := sessions.Logout(ctx, token, view.Record.CSRF); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := repo.GetOwned(ctx, actor, published.ID); err == nil {
-			t.Fatal("rotated session can still manage project")
-		}
+		logoutAttempted := false
+		awaitRuntimeSetup(t, "logout", func() error {
+			if logoutAttempted {
+				// A lost acknowledgement must not blindly rotate twice. Confirm
+				// the old record through the real RPC store before retrying.
+				digest, _ := session.Digest(token)
+				record, e := sessions.Store.Get(ctx, digest)
+				if e != nil {
+					return e
+				}
+				if record.Revoked {
+					return nil
+				}
+			}
+			logoutAttempted = true
+			_, _, e := sessions.Logout(ctx, token, view.Record.CSRF)
+			return e
+		})
+		awaitRuntimeSetup(t, "confirm revoked owner access", func() error {
+			_, e := repo.GetOwned(ctx, actor, published.ID)
+			if errors.Is(e, ErrNotLeader) {
+				return e
+			}
+			if !errors.Is(e, session.ErrUnauthorized) {
+				t.Fatal("rotated session did not get an authentication refusal", e)
+			}
+			return nil
+		})
 		// Both observation-only paths ignore pending operator requests, including
 		// deliberately malformed ones that would fail a normal coordinator startup.
 		for _, name := range []string{"recover-singleton.json", "restore-singleton.json"} {
@@ -292,18 +372,24 @@ func TestCoordinatorRuntimeLifecycle(t *testing.T) {
 		}
 		req, _ = http.NewRequest("GET", "https://"+c.StatusListen+"/readyz", nil)
 		req.Header.Set("X-Drop-Cluster", testClusterID)
-		response, err = client.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_ = response.Body.Close()
-		want := 503
-		if i == leader {
-			want = 200
-		}
-		if response.StatusCode != want {
-			t.Fatal("incorrect readiness", i, response.StatusCode)
-		}
+		awaitRuntimeSetup(t, "readiness", func() error {
+			response, err := client.Do(req)
+			if err != nil {
+				return err
+			}
+			_ = response.Body.Close()
+			want := 503
+			if i == leader {
+				want = 200
+				if response.StatusCode == 503 {
+					return ErrNotLeader
+				}
+			}
+			if response.StatusCode != want {
+				t.Fatal("incorrect readiness", i, response.StatusCode)
+			}
+			return nil
+		})
 	}
 	// Confirm listeners are actual TCP services, not in-memory transport hooks.
 	conn, err := net.DialTimeout("tcp", configs[leader].Listen, time.Second)
@@ -311,6 +397,21 @@ func TestCoordinatorRuntimeLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = conn.Close()
+}
+
+// Use only for disposable fixture allocation, read-only calls, or operations
+// with explicit idempotency/confirmation. The 750ms authority proof may expire
+// during a multi-RPC request, particularly around a leadership change. Only that
+// fail-closed response is retried; identity errors and assertions fail at once.
+func awaitRuntimeSetup(t *testing.T, operation string, run func() error) {
+	t.Helper()
+	awaitFor(t, 15*time.Second, func() bool {
+		err := run()
+		if err != nil && !errors.Is(err, ErrNotLeader) {
+			t.Fatalf("%s: %v", operation, err)
+		}
+		return err == nil
+	})
 }
 
 // Constructor tests keep the real stores/listeners while explicitly injecting
