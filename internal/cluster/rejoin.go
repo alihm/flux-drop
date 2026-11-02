@@ -8,6 +8,9 @@ import (
 )
 
 func (e *enrollment) shouldRequestRejoin(found bool, now time.Time) bool {
+	if e.observer.leaderConflictDetected() {
+		return false
+	}
 	if !found {
 		return true
 	}
@@ -28,7 +31,7 @@ func (e *enrollment) shouldRequestRejoin(found bool, now time.Time) bool {
 			leaders++
 		}
 	}
-	if leaders != 1 {
+	if leaders == 0 {
 		return false
 	}
 	contact := e.node.raft.LastContact()

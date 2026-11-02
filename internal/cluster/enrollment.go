@@ -102,6 +102,7 @@ func loadEnrollmentCredential(path, contentDir string) ([32]byte, error) {
 }
 
 func newEnrollment(n *Node, o *Observer, c RuntimeConfig, material TLSMaterial) (*enrollment, error) {
+	o.setLocalStatus(n.Status)
 	var key [32]byte
 	var err error
 	if raw := os.Getenv("DROP_CLUSTER_ENROLLMENT_KEY"); raw != "" {
@@ -451,19 +452,11 @@ func (e *enrollment) reconcile(ctx context.Context) error {
 }
 
 func (e *enrollment) request(ctx context.Context) error {
-	peers, fresh := e.observer.Snapshot()
-	if !fresh {
-		return ErrNotLeader
+	leader, err := e.leaderForRequest(ctx)
+	if err != nil {
+		return err
 	}
-	leaders := 0
-	for _, p := range peers {
-		if p.Status.Role == "Leader" {
-			leaders++
-		}
-	}
-	if leaders != 1 {
-		return ErrNotLeader
-	}
+	peers := []Observation{leader}
 	data, _ := json.Marshal(e.node.config.Local)
 	for _, p := range peers {
 		if p.Status.Role != "Leader" {

@@ -45,7 +45,6 @@ type recoveryManager struct {
 	policyFingerprint string
 	reported          bool
 	fenceReported     bool
-	conflictLogged    time.Time
 	conflictDetected  bool
 }
 
@@ -200,28 +199,10 @@ func validRecoveryAddresses(addresses []netip.AddrPort, port uint16) bool {
 	}
 	return true
 }
-func (m *recoveryManager) observeLeaderConflict(now time.Time) {
-	peers, fresh := m.observer.Snapshot()
-	if !fresh {
-		return
-	}
-	leaders := map[string]bool{}
-	if m.node.raft.State() == raft.Leader {
-		leaders[m.node.config.Local.ID] = true
-	}
-	for _, p := range peers {
-		if p.Status.Role == "Leader" {
-			leaders[p.Status.ID] = true
-		}
-	}
-	if len(leaders) > 1 {
-		m.conflictDetected = true
-	}
-	if len(leaders) > 1 && (m.conflictLogged.IsZero() || now.Sub(m.conflictLogged) >= time.Minute) {
-		slog.Error("multiple cluster leaders observed; refusing automatic merge or reset", "leaders", len(leaders))
-		m.conflictLogged = now
-	}
+func (m *recoveryManager) observeLeaderConflict(_ time.Time) {
+	m.conflictDetected = m.observer.leaderConflictDetected()
 }
+
 func recoveryBlocked(c Config, now time.Time) bool {
 	for _, name := range []string{"recover-singleton.json", "restore-singleton.json", generationPendingFile, "rejoin-reset.json"} {
 		info, err := os.Lstat(filepath.Join(c.StateDir, name))
@@ -262,7 +243,7 @@ func recoveryBlocked(c Config, now time.Time) bool {
 
 func (m *recoveryManager) evaluate(ctx context.Context, addresses []netip.AddrPort, hash string, now time.Time) (recoveryPlan, error) {
 	var plan recoveryPlan
-	if m.node.raftGuard == nil {
+	if m.node.raftGuard == nil || m.observer.leaderConflictDetected() {
 		return plan, ErrNotLeader
 	}
 	local, _ := netip.ParseAddrPort(m.node.config.Local.Address)
@@ -436,7 +417,7 @@ func (m *recoveryManager) performRecovery(ctx context.Context) (stopped bool, er
 	}
 	latestPolicy, latestSignature := loadAutoRecoveryPolicy(m.node.config)
 	latestAddresses, latestFresh := m.source.Snapshot()
-	if !latestPolicy.Valid || latestPolicy.Mode != "on" || latestSignature != signature || !latestFresh || discoveryView(latestAddresses) != plan.view || m.conflictDetected || !recoverySampleGapValid(m.lastSample, m.now()) {
+	if !latestPolicy.Valid || latestPolicy.Mode != "on" || latestSignature != signature || !latestFresh || discoveryView(latestAddresses) != plan.view || m.conflictDetected || m.observer.leaderConflictDetected() || !recoverySampleGapValid(m.lastSample, m.now()) {
 		return false, ErrNotLeader
 	}
 	// No concurrent membership/write operation can continue once Close returns.

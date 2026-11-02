@@ -188,6 +188,9 @@ func (e *enrollment) exchangeRejoin(ctx context.Context, p Observation) (rejoinR
 // majority of this node's old generation. Unknown/legacy generations count as
 // potentially live: compatibility must delay recovery, never justify it.
 func (e *enrollment) mayReset(ctx context.Context) bool {
+	if e.observer.leaderConflictDetected() {
+		return false
+	}
 	if e.node.raft.State() == raft.Leader {
 		return false
 	}
@@ -228,7 +231,7 @@ func (e *enrollment) mayReset(ctx context.Context) bool {
 			reachable++
 		}
 	}
-	return !selfVoter || reachable < voters/2+1
+	return !e.observer.leaderConflictDetected() && (!selfVoter || reachable < voters/2+1)
 }
 
 type resetIntent struct {

@@ -109,6 +109,9 @@ type Observation struct {
 // Observer periodically refreshes authenticated status for fresh Flux candidates.
 // It intentionally has NO reference to membership mutation/election methods.
 type Observer struct {
+	now            func() time.Time // configured before workers; nil uses the real clock
+	localStatus    func() Status    // sampled only inside a refresh round
+	leaders        leaderConflict
 	source         PeerSource
 	client         *http.Client
 	app, clusterID string
@@ -157,10 +160,26 @@ func (o *Observer) probe(ctx context.Context, address netip.AddrPort) (Observati
 		return Observation{}, errors.New("invalid peer role")
 	}
 	key := sha256.Sum256(response.TLS.PeerCertificates[0].RawSubjectPublicKeyInfo)
-	return Observation{Address: address.String(), Status: status, ObservedAt: time.Now().UTC(), keyHash: hex.EncodeToString(key[:])}, nil
+	return Observation{Address: address.String(), Status: status, ObservedAt: o.clock().UTC(), keyHash: hex.EncodeToString(key[:])}, nil
 }
 
 func (o *Observer) Refresh(ctx context.Context) error {
+	complete := false
+	defer func() {
+		if !complete {
+			o.mu.Lock()
+			o.leaders.breakContinuity()
+			o.mu.Unlock()
+		}
+	}()
+	o.mu.RLock()
+	readLocal := o.localStatus
+	o.mu.RUnlock()
+	var local *Observation
+	if readLocal != nil {
+		sample := Observation{Status: readLocal(), ObservedAt: o.clock().UTC()}
+		local = &sample
+	}
 	addresses, fresh := o.source.Snapshot()
 	if !fresh {
 		o.mu.Lock()
@@ -212,7 +231,13 @@ func (o *Observer) Refresh(ctx context.Context) error {
 	}
 	o.mu.Lock()
 	o.observations = observations
-	o.updated = time.Now()
+	round := observations
+	if local != nil && !seen[local.Status.ID] {
+		round = append(append([]Observation(nil), observations...), *local)
+	}
+	o.updated = o.clock()
+	o.leaders.observe(o.updated, round, o.clusterID)
+	complete = true
 	o.mu.Unlock()
 	return nil
 }
@@ -220,7 +245,7 @@ func (o *Observer) Refresh(ctx context.Context) error {
 func (o *Observer) Snapshot() ([]Observation, bool) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
-	if o.updated.IsZero() || time.Since(o.updated) > 90*time.Second {
+	if o.updated.IsZero() || o.clock().Before(o.updated) || o.clock().Sub(o.updated) > 90*time.Second {
 		return nil, false
 	}
 	return append([]Observation(nil), o.observations...), true

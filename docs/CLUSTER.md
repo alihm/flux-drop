@@ -662,9 +662,15 @@ failed/empty fetch cannot establish absence. An engaged fence stays until fresh
 relisting (or leaving `on`); relisting clears it immediately. In `observe` this
 only logs what would happen. A self-fenced leader repeatedly attempts leadership
 transfer, at most once per second, so a healthy majority can restore writes.
-Handoff never clears the fence; only relisting or leaving `on` does. Seeing two leaders logs an error and latches automatic
-recovery off for that process pending operator review/restart; enrollment never
-resets an old history when multiple leaders are observed.
+Handoff never clears the fence; only relisting or leaving `on` does.
+
+Leader conflicts use complete Observer refresh rounds, including a local role
+sample taken inside that round. Two consecutive conflicting rounds latch recovery
+and reset off, with an error log; live local roles are never mixed with an older
+peer snapshot. About two minutes of continuous single-leader rounds clear the
+latch and log the recovery. Failed rounds, clock/sample gaps and leaderless rounds
+restart clearance. Enrollment uses the same latch and directly rechecks ambiguous
+transition candidates rather than choosing between two currently live leaders.
 
 A dead Flux node can remain listed for about **125 minutes**; because an
 unreachable listed node blocks agreement, recovery can take that delay plus the

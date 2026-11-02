@@ -652,9 +652,16 @@ func TestMultipleLeadersDisableRecoveryAndRejoin(t *testing.T) {
 	}
 	a, b := h.nodes[0], h.nodes[1]
 	onlyListed(h, a, b)
+	a.observer.now = func() time.Time { return h.now }
 	a.observer.Refresh(context.Background())
 	signedRecoveryMode(t, a, "on")
 	m := recoveryTestManager(h, a)
+	_ = m.tick(context.Background())
+	if m.conflictDetected {
+		t.Fatal("one round latched a conflict")
+	}
+	h.now = h.now.Add(autoRecoveryInterval)
+	a.observer.Refresh(context.Background())
 	if err := m.tick(context.Background()); err == nil || !m.conflictDetected {
 		t.Fatal("two leaders not quarantined", err)
 	}
@@ -663,6 +670,24 @@ func TestMultipleLeadersDisableRecoveryAndRejoin(t *testing.T) {
 	}
 	if a.node.controlPending.Load() {
 		t.Fatal("split brain requested automatic merge")
+	}
+	onlyListed(h, a)
+	// Every refresh still uses the real TLS status listener, including self.
+	for i := 0; i <= 8; i++ {
+		h.now = h.now.Add(autoRecoveryInterval)
+		if err := a.observer.Refresh(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		_ = m.tick(context.Background())
+		if i < 8 && !m.conflictDetected {
+			t.Fatal("conflict cleared before two minutes of rounds")
+		}
+	}
+	if m.conflictDetected {
+		t.Fatal("single leader did not clear conflict latch")
+	}
+	if candidate, err := a.enrollment.leaderForRequest(context.Background()); err != nil || candidate.Status.ID != a.config.Local.ID {
+		t.Fatal("enrollment latch did not clear", err)
 	}
 }
 

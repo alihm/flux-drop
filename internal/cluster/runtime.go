@@ -292,6 +292,7 @@ func startRuntimeWithSetup(parent context.Context, c RuntimeConfig, runDiscovery
 	if err != nil {
 		return nil, err
 	}
+	observer.setLocalStatus(node.Status)
 	if c.Automatic {
 		source, err := replica.NewDiscovery(c.App, c.StatusPort, nil)
 		if err != nil {
