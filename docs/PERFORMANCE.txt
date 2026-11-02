@@ -35,6 +35,13 @@ Live pre-change baseline from this host (100 mixed requests, 50 connections):
   thumbnails: p50 1538 / p95 2746 / p99 2859 ms
 Network performance after deployment must be measured again at the same origin.
 
+Descriptor integrity cache:
+  A descriptor's ctime must be at least one second old before its hash can be
+  memoized or coalesced. Recent files are rehashed independently because rapid
+  writes can share a coarse filesystem timestamp even after mtime is restored.
+  Stable files retain the bounded cache fast path; authorization is not cached.
+  Published bytes must still remain immutable while being sent.
+
 Instrumentation
 Server-Timing reports exclusive metadata, verify and file preparation phases,
 plus total Go app time through response-header commitment. For Nginx internal

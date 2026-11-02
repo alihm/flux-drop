@@ -11,14 +11,19 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
+	"time"
 
 	"golang.org/x/sync/singleflight"
 )
 
 // DescriptorHashes caches integrity only, never authorization. The identity
-// includes nanosecond ctime as well as mtime: rewriting bytes then restoring mtime
-// cannot reuse a cached hash. Published content must remain immutable during send.
+// includes ctime as well as mtime. Linux can give rapid writes identical coarse
+// timestamps, despite nanosecond stat fields. Recently changed files therefore
+// bypass both memoization and coalescing. Published content must remain immutable
+// during send.
 var DescriptorHashes = &DescriptorCache{entries: map[string]*list.Element{}, lru: list.New(), slots: make(chan struct{}, 8)}
+
+const descriptorTimestampWindow = time.Second
 
 type DescriptorCache struct {
 	mu      sync.Mutex
@@ -28,23 +33,31 @@ type DescriptorCache struct {
 	slots   chan struct{}
 }
 
-func descriptorIdentity(f *os.File, digest, hash string, size int64) (string, error) {
+func descriptorIdentity(f *os.File, digest, hash string, size int64) (string, bool, error) {
 	info, e := f.Stat()
 	if e != nil {
-		return "", e
+		return "", false, e
 	}
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || !info.Mode().IsRegular() || info.Size() != size {
-		return "", ErrInvalid
+		return "", false, ErrInvalid
 	}
-	return fmt.Sprintf("%s/%s/%d/%d/%d/%d/%d/%d/%d", digest, hash, st.Dev, st.Ino, size, st.Mtim.Sec, st.Mtim.Nsec, st.Ctim.Sec, st.Ctim.Nsec), nil
+	// A one-second settling window covers the local Linux filesystem/kernel
+	// clock tick. Future timestamps also fail closed to a real hash. Restoring
+	// mtime cannot make ctime older, so a fresh mutation cannot hit an entry
+	// that was first cached after its timestamp had settled.
+	cacheable := time.Since(time.Unix(st.Ctim.Sec, st.Ctim.Nsec)) >= descriptorTimestampWindow
+	return fmt.Sprintf("%s/%s/%d/%d/%d/%d/%d/%d/%d", digest, hash, st.Dev, st.Ino, size, st.Mtim.Sec, st.Mtim.Nsec, st.Ctim.Sec, st.Ctim.Nsec), cacheable, nil
 }
 func (c *DescriptorCache) Verify(ctx context.Context, f *os.File, digest string, entry File) error {
-	key, e := descriptorIdentity(f, digest, entry.SHA256, entry.Size)
+	key, cacheable, e := descriptorIdentity(f, digest, entry.SHA256, entry.Size)
 	if e != nil {
 		return e
 	}
 	hit := func() bool {
+		if !cacheable {
+			return false
+		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if v := c.entries[key]; v != nil {
@@ -56,7 +69,7 @@ func (c *DescriptorCache) Verify(ctx context.Context, f *os.File, digest string,
 	if hit() {
 		return nil
 	}
-	_, e, _ = c.flight.Do(key, func() (any, error) {
+	verify := func() (any, error) {
 		if hit() {
 			return nil, nil
 		}
@@ -86,24 +99,33 @@ func (c *DescriptorCache) Verify(ctx context.Context, f *os.File, digest string,
 				return nil, err
 			}
 		}
-		after, err := descriptorIdentity(f, digest, entry.SHA256, entry.Size)
+		after, _, err := descriptorIdentity(f, digest, entry.SHA256, entry.Size)
 		if err != nil || after != key || n != entry.Size || hex.EncodeToString(h.Sum(nil)) != entry.SHA256 {
 			return nil, ErrInvalid
 		}
-		c.mu.Lock()
-		c.entries[key] = c.lru.PushFront(key)
-		for c.lru.Len() > 4096 {
-			old := c.lru.Back()
-			delete(c.entries, old.Value.(string))
-			c.lru.Remove(old)
+		if cacheable {
+			c.mu.Lock()
+			c.entries[key] = c.lru.PushFront(key)
+			for c.lru.Len() > 4096 {
+				old := c.lru.Back()
+				delete(c.entries, old.Value.(string))
+				c.lru.Remove(old)
+			}
+			c.mu.Unlock()
 		}
-		c.mu.Unlock()
 		return nil, nil
-	})
+	}
+	if cacheable {
+		_, e, _ = c.flight.Do(key, verify)
+	} else {
+		// Another request's result is not evidence about this fresh descriptor:
+		// an intervening write may still share its timestamp and identity key.
+		_, e = verify()
+	}
 	if e != nil {
 		return e
 	}
-	after, e := descriptorIdentity(f, digest, entry.SHA256, entry.Size)
+	after, _, e := descriptorIdentity(f, digest, entry.SHA256, entry.Size)
 	if e != nil || after != key {
 		return ErrInvalid
 	}
