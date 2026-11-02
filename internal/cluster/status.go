@@ -41,6 +41,10 @@ func (n *Node) statusHandler(app string, observer *Observer) http.Handler {
 			http.Error(w, "forbidden", 403)
 			return
 		}
+		if r.URL.Path == rejoinPath && n.enrollment != nil {
+			n.enrollment.rejoinServe(w, r)
+			return
+		}
 		if r.URL.Path == enrollmentPath && n.enrollment != nil {
 			n.enrollment.serve(w, r)
 			return

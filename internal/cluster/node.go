@@ -28,6 +28,12 @@ import (
 const operationTimeout = 5 * time.Second
 
 type Node struct {
+	generationPending atomic.Bool
+	generationCancel  context.CancelFunc
+	generationDone    chan struct{}
+	control           chan bool
+	controlPending    atomic.Bool
+
 	backupCancel      context.CancelFunc
 	backupDone        chan struct{}
 	backupFailures    atomic.Uint64
@@ -67,6 +73,14 @@ func start(c Config, transport raft.Transport, tune func(*raft.Config)) (*Node, 
 		return nil, errors.New("transport local identity mismatch")
 	}
 	if err := prepareDirectory(c); err != nil {
+		return nil, err
+	}
+	if err := resumeSuperseded(c); err != nil {
+		return nil, err
+	}
+	if _, err := os.Lstat(filepath.Join(c.StateDir, "rejoin-reset.json")); err == nil {
+		c.InitialVoters = nil
+	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
 	request, requestInfo, err := singletonRequestFile(c)
@@ -141,6 +155,9 @@ func start(c Config, transport raft.Transport, tune func(*raft.Config)) (*Node, 
 		if err := backupBeforeRecovery(c, stamp); err != nil {
 			return nil, err
 		}
+		if err := prepareGenerationIntent(c); err != nil {
+			return nil, err
+		}
 		if err := store.Close(); err != nil {
 			return nil, err
 		}
@@ -154,6 +171,9 @@ func start(c Config, transport raft.Transport, tune func(*raft.Config)) (*Node, 
 		}
 	}
 	if restore != nil {
+		if err := prepareGenerationIntent(c); err != nil {
+			return nil, err
+		}
 		if err := installSingletonRestore(c, store, snapshots, transport, restore); err != nil {
 			return nil, err
 		}
@@ -163,7 +183,7 @@ func start(c Config, transport raft.Transport, tune func(*raft.Config)) (*Node, 
 	if err != nil {
 		return nil, err
 	}
-	n := &Node{raft: r, state: fsm, store: store, snapshots: snapshots, transport: transport, config: c, started: time.Now(), localEpoch: rand.Text(), operations: make(chan struct{}, 64)}
+	n := &Node{control: make(chan bool, 1), raft: r, state: fsm, store: store, snapshots: snapshots, transport: transport, config: c, started: time.Now(), localEpoch: rand.Text(), operations: make(chan struct{}, 64)}
 	if c.AsyncContent {
 		n.async, err = newAsyncWriter(n)
 		if err != nil {
@@ -183,6 +203,10 @@ func start(c Config, transport raft.Transport, tune func(*raft.Config)) (*Node, 
 			}
 			return nil, err
 		}
+	}
+	if err := n.startRecoveryGeneration(); err != nil {
+		_ = n.Close()
+		return nil, err
 	}
 	n.startAnalytics()
 	n.startMetadataBackups()
@@ -237,6 +261,10 @@ func bindIdentity(c Config, hasState bool) error {
 
 func (n *Node) Close() error {
 	n.closeOnce.Do(func() {
+		if n.generationCancel != nil {
+			n.generationCancel()
+			<-n.generationDone
+		}
 		if n.backupCancel != nil {
 			n.backupCancel()
 			<-n.backupDone

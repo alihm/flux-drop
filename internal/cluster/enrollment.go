@@ -42,6 +42,7 @@ type membershipPolicy struct {
 // private shared admission credential. The credential never replaces TLS trust
 // or bootstraps a voting configuration from discovery.
 type enrollment struct {
+	approvals         rejoinApprovals
 	localKeyHash      string
 	memberKeys        map[string]string
 	node              *Node
@@ -181,6 +182,27 @@ func (e *enrollment) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (e *enrollment) admit(ctx context.Context, a admission) error {
+	if e.node.generationPending.Load() {
+		select {
+		case <-e.node.generationDone:
+			if e.node.generationPending.Load() {
+				return ErrNotLeader
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	generation, err := e.node.recoveryGeneration()
+	if err != nil {
+		return err
+	}
+	if generation.Generation > 0 && !e.approved(a, generation) {
+		address, _ := netip.ParseAddrPort(a.Member.Address)
+		peer, err := e.observer.probe(ctx, netip.AddrPortFrom(address.Addr(), e.port))
+		if err != nil || peer.Status.ID != a.Member.ID || peer.Status.LastIndex != 0 {
+			return ErrNotCaughtUp
+		}
+	}
 	configuration, _, err := e.node.configuration(ctx)
 	if err != nil {
 		return err
@@ -243,7 +265,7 @@ func (e *enrollment) admit(ctx context.Context, a admission) error {
 			}
 			// A non-retired, stranded history may predate forced recovery. It cannot
 			// rejoin safely until the recovery-generation protocol verifies its lineage.
-			if !returning && peer.Status.LastIndex > 0 {
+			if !returning && peer.Status.LastIndex > 0 && (generation.Generation == 0 || !e.approved(a, generation)) {
 				return ErrNotCaughtUp
 			}
 		}
@@ -326,6 +348,9 @@ func (e *enrollment) target(ctx context.Context) (int, error) {
 }
 
 func (e *enrollment) reconcile(ctx context.Context) error {
+	if e.node.generationPending.Load() {
+		return ErrNotLeader
+	}
 	configuration, configIndex, err := e.committedConfiguration(ctx)
 	if err != nil {
 		return err
@@ -434,6 +459,21 @@ func (e *enrollment) request(ctx context.Context) error {
 	for _, p := range peers {
 		if p.Status.Role != "Leader" {
 			continue
+		}
+		if e.node.raft.LastIndex() > 0 {
+			reply, err := e.exchangeRejoin(ctx, p)
+			if err != nil {
+				return err
+			}
+			if reply.Result == "reset_required" {
+				if e.mayReset(ctx) && e.node.controlPending.CompareAndSwap(false, true) {
+					e.node.control <- true
+				}
+				return ErrNotLeader
+			}
+			if reply.Result != "ok" {
+				return ErrNotLeader
+			}
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+p.Address+enrollmentPath, bytes.NewReader(data))
 		if err != nil {

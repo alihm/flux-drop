@@ -517,3 +517,30 @@ learner. Such a returning node is therefore deferred until its term is no
 higher than the leader's, preserving its data and current leader authority.
 Pre-vote alone does not solve this case. Removal also cannot cancel an RPC
 already in flight; an immediate high-term restart can still complete that RPC.
+
+### Recovery generations and superseded histories
+
+Both singleton recovery paths now write `cluster_recovery/generation` after
+first becoming leader, before admitting returning histories. An absent record
+means generation zero. An absent, unretired generation-zero history cannot be
+certified by that handshake: it may predate a legacy recovery. It keeps waiting
+for operator review/reset instead of rejoining with unverifiable applied state.
+Same-key health retirees still use normal equal-generation rejoin.
+
+A private, fsynced intent makes that commit restartable;
+its random lineage distinguishes independently recovered histories. A generation
+high-water mark on the replicated content volume also prevents a known older
+backup from reusing a generation. If all evidence of a newer history is lost,
+no local counter can prove that it once existed: keep off-node backups and never
+run independent recoveries.
+
+Returning nodes use the credential-protected mTLS `/_drop_cluster/rejoin`
+protocol without changing the legacy enrollment body. An older peer returning
+404 means wait. Equal-generation health retirees keep their state; older
+histories receive `reset_required`. A node may act on that advice only without
+its own leader and without a reachable majority of its old generation. Runtime
+then closes Raft, journals an atomic move of `raft.db` and `snapshots/` into
+`superseded-<UTC timestamp>/`, and requests a container restart. Identity and
+keys remain local. Only the newest superseded archive is retained. Interrupted
+moves resume before opening Raft; a reset node enrolls empty and catches up.
+The singleton user/security-write block is unchanged.

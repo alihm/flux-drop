@@ -318,6 +318,24 @@ func startRuntimeWithSetup(parent context.Context, c RuntimeConfig, runDiscovery
 	if setup != nil {
 		setup(r)
 	}
+	r.workers.Add(1)
+	go func() {
+		defer r.workers.Done()
+		select {
+		case <-ctx.Done():
+			return
+		case <-node.control:
+		}
+		if err := node.Close(); err != nil {
+			r.errors <- err
+			return
+		}
+		if err := archiveSuperseded(node.config); err != nil {
+			r.errors <- err
+			return
+		}
+		r.errors <- errors.New("superseded Raft history archived; container restart required")
+	}()
 	r.workers.Add(3)
 	go func() { defer r.workers.Done(); runDiscovery(ctx, discovery) }()
 	go func() { defer r.workers.Done(); observer.Run(ctx) }()
