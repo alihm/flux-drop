@@ -353,9 +353,24 @@ func TestCommittedMembershipExcludesPendingConfiguration(t *testing.T) {
 	leader := h.leader()
 	await(t, func() bool { return h.step() == nil })
 	spare := h.add(nil)
+	// Bootstrap writes may have caused an authority handoff. Select a fresh
+	// verified leader after setup rather than retaining an earlier observation.
+	leader = h.leader()
+	var stopped []raft.Future
+	t.Cleanup(func() {
+		// Join the first shutdown futures before the group's Node.Close calls:
+		// Raft's repeated Shutdown returns an already-completed future.
+		for _, future := range stopped {
+			if err := future.Error(); err != nil {
+				t.Error("stop voter", err)
+			}
+		}
+	})
 	for _, node := range h.nodes[:3] {
 		if node != leader {
-			h.stop(node)
+			// Shutdown stops acknowledgements synchronously. Do not wait for
+			// transport/disk cleanup while the survivor's leader lease expires.
+			stopped = append(stopped, node.node.raft.Shutdown())
 		}
 	}
 	// Raft's real configuration-change path appends this entry but cannot
