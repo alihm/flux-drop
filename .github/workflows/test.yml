@@ -59,13 +59,17 @@ jobs:
 
   go:
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.1'
           cache: false
-      - run: go test -race ./...
+      # Real Raft/TLS tests can exceed Go's default ten-minute package limit.
+      # Isolate packages so password hashing/builds cannot starve Raft heartbeats.
+      # Tests still exercise their own concurrent requests under the race detector.
+      - run: go test -race -p=1 -timeout=30m ./...
       - name: Verify replica-aware storage reclamation with real Syncthing
         run: bash scripts/test-storage-reclamation.sh
       - run: go vet ./...

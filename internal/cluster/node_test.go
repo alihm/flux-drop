@@ -31,16 +31,25 @@ func tuneTest(c *raft.Config) {
 	c.TrailingLogs = 8
 }
 
-func newTestGroup(t *testing.T) *testGroup {
+func newTestGroup(t testing.TB) *testGroup {
 	return newTestGroupMode(t, false)
 }
 
-func newTestGroupMode(t *testing.T, async bool) *testGroup {
+func newTestGroupMode(t testing.TB, async bool) *testGroup {
+	t.Helper()
+	tune := tuneTest
+	if async {
+		tune = func(c *raft.Config) { c.SnapshotThreshold = 32; c.TrailingLogs = 8 }
+	}
+	return newTestGroupWithTiming(t, async, tune, 500*time.Millisecond)
+}
+
+func newTestGroupWithTiming(t testing.TB, async bool, tune func(*raft.Config), rpcTimeout time.Duration) *testGroup {
 	t.Helper()
 	g := &testGroup{}
 	initial := []Member{{ID: "one", Address: "127.0.0.1:18001"}, {ID: "two", Address: "127.0.0.1:18002"}, {ID: "three", Address: "127.0.0.1:18003"}}
 	for _, m := range initial {
-		_, transport := raft.NewInmemTransport(raft.ServerAddress(m.raftAddress()))
+		_, transport := raft.NewInmemTransportWithTimeout(raft.ServerAddress(m.raftAddress()), rpcTimeout)
 		g.transports = append(g.transports, transport)
 		root := t.TempDir()
 		if err := os.Chmod(root, 0700); err != nil {
@@ -56,10 +65,6 @@ func newTestGroupMode(t *testing.T, async bool) *testGroup {
 		}
 	}
 	for i, c := range g.configs {
-		tune := tuneTest
-		if async {
-			tune = func(c *raft.Config) { c.SnapshotThreshold = 32; c.TrailingLogs = 8 }
-		}
 		node, err := start(c, g.transports[i], tune)
 		if err != nil {
 			t.Fatal(err)
@@ -74,9 +79,14 @@ func newTestGroupMode(t *testing.T, async bool) *testGroup {
 	return g
 }
 
-func await(t *testing.T, condition func() bool) {
+func await(t testing.TB, condition func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(8 * time.Second)
+	awaitFor(t, 8*time.Second, condition)
+}
+
+func awaitFor(t testing.TB, timeout time.Duration, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if condition() {
 			return
@@ -86,7 +96,7 @@ func await(t *testing.T, condition func() bool) {
 	t.Fatal("condition did not converge")
 }
 
-func (g *testGroup) leader(t *testing.T, exclude int) int {
+func (g *testGroup) leader(t testing.TB, exclude int) int {
 	t.Helper()
 	found := -1
 	await(t, func() bool {

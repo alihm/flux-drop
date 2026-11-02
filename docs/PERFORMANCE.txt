@@ -25,7 +25,10 @@ Incremental verification measurements:
   Warm Explore: no metadata RPCs; measured metadata phase ~0.003 ms.
   Config: no metadata RPCs; measured app phase ~0.013 ms.
   go test ./internal/httpserver -run '^$' -bench BenchmarkSiteAssets -benchtime=300ms
-  go test -v ./internal/cluster -run TestTransactionReadPerformanceAndRevocation
+  go test ./internal/cluster -run '^$' -bench '^BenchmarkTransactionReads$' -benchtime=100x
+  The read comparison is now an opt-in Go benchmark (ns/op and allocations).
+  The historical quantiles above came from the former latency-sampling test;
+  CI retains the transaction, policy-revocation and fence-reuse assertions.
 
 Live pre-change baseline from this host (100 mixed requests, 50 connections):
   all: p50 1512 / p95 2785 / p99 4190 ms

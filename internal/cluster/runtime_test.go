@@ -184,7 +184,16 @@ func TestCoordinatorRuntimeLifecycle(t *testing.T) {
 		// already cached another leader. They never poison management routing.
 		await(t, func() bool {
 			records, _, e := runtimes[i].Node.localSnapshot(ctx, []string{"projects/" + published.ID}, nil)
-			return e == nil && records["projects/"+published.ID].Version != 0
+			if e != nil || records["projects/"+published.ID].Version == 0 {
+				return false
+			}
+			var applied project.Project
+			if e := metadata.Decode(records["projects/"+published.ID].Value, &applied); e != nil {
+				t.Fatal("decode local project", e)
+			}
+			// Reserve already creates a record. The follower must have applied
+			// Activate before a positive serving lookup can be asserted.
+			return applied.Revision == published.Revision && applied.Status == "active" && applied.ActiveDigest == published.ActiveDigest
 		})
 		metadataClient.mu.Lock()
 		cachedLeader := metadataClient.leaderID
