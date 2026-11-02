@@ -153,7 +153,7 @@ func TestRestoreRefusalsLeaveStateUnchanged(t *testing.T) {
 			}
 			os.WriteFile(filepath.Join(c.StateDir, "restore-singleton.json"), request, 0600)
 			if name == "both" {
-				raw, _ := json.Marshal(singletonRequest{c.ClusterID, c.Local.ID, 1})
+				raw, _ := json.Marshal(singletonRequest{ClusterID: c.ClusterID, NodeID: c.Local.ID, ExpectedLastIndex: 1})
 				os.WriteFile(filepath.Join(c.StateDir, "recover-singleton.json"), raw, 0600)
 			}
 			dbPath := filepath.Join(c.StateDir, "raft.db")

@@ -28,6 +28,7 @@ import (
 const operationTimeout = 5 * time.Second
 
 type Node struct {
+	recoveryDetails   recoveryDetails
 	generationPending atomic.Bool
 	generationCancel  context.CancelFunc
 	generationDone    chan struct{}

@@ -384,7 +384,7 @@ func TestSingletonRecoveryRefusalsDoNotWriteStore(t *testing.T) {
 	store := recoveryReadStore(t, c)
 	index, _ := store.LastIndex()
 	store.Close()
-	valid, _ := json.Marshal(singletonRequest{c.ClusterID, c.Local.ID, index})
+	valid, _ := json.Marshal(singletonRequest{ClusterID: c.ClusterID, NodeID: c.Local.ID, ExpectedLastIndex: index})
 	cases := map[string][]byte{
 		"wrong-case":    bytes.Replace(valid, []byte(`"clusterID"`), []byte(`"ClusterID"`), 1),
 		"case-alias":    []byte(fmt.Sprintf(`{"clusterID":%q,"ClusterID":%q,"nodeID":%q,"expectedLastIndex":%d}`, c.ClusterID, c.ClusterID, c.Local.ID, index)),

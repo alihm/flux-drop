@@ -20,11 +20,16 @@ type singletonRequest struct {
 	ClusterID         string `json:"clusterID"`
 	NodeID            string `json:"nodeID"`
 	ExpectedLastIndex uint64 `json:"expectedLastIndex"`
+	AllowLearner      bool   `json:"allowLearner,omitempty"`
 }
 
 // Only an operator-owned file authorizes recovery. O_NOFOLLOW and fstat bind
 // validation to the opened inode, not to a potentially replaced pathname.
 func readOperatorRequest(path string, into any, fields ...string) (os.FileInfo, error) {
+	return readOperatorRequestOptional(path, into, fields, nil)
+}
+
+func readOperatorRequestOptional(path string, into any, fields, optional []string) (os.FileInfo, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
@@ -52,6 +57,9 @@ func readOperatorRequest(path string, into any, fields ...string) (os.FileInfo, 
 	seen := map[string]bool{}
 	allowed := map[string]bool{}
 	for _, field := range fields {
+		allowed[field] = true
+	}
+	for _, field := range optional {
 		allowed[field] = true
 	}
 	for dec.More() {
@@ -85,7 +93,7 @@ func readOperatorRequest(path string, into any, fields ...string) (os.FileInfo, 
 
 func singletonRequestFile(c Config) (*singletonRequest, os.FileInfo, error) {
 	var request singletonRequest
-	info, err := readOperatorRequest(filepath.Join(c.StateDir, "recover-singleton.json"), &request, "clusterID", "nodeID", "expectedLastIndex")
+	info, err := readOperatorRequestOptional(filepath.Join(c.StateDir, "recover-singleton.json"), &request, []string{"clusterID", "nodeID", "expectedLastIndex"}, []string{"allowLearner"})
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil, nil
 	}
@@ -161,7 +169,7 @@ func validateSingleton(c Config, request *singletonRequest, existing bool, store
 		return err
 	}
 	for _, member := range configuration.Servers {
-		if string(member.ID) == c.Local.ID && member.Suffrage == raft.Voter {
+		if string(member.ID) == c.Local.ID && (member.Suffrage == raft.Voter || request.AllowLearner && member.Suffrage == raft.Nonvoter) {
 			return nil
 		}
 	}

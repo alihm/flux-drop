@@ -59,6 +59,13 @@ func (n *Node) statusHandler(app string, observer *Observer) http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
+		case recoveryViewPath:
+			view, err := n.RecoveryView()
+			if err != nil {
+				http.Error(w, "recovery view unavailable", 503)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(view)
 		case StatusPath:
 			_ = json.NewEncoder(w).Encode(n.Status())
 		case "/_drop_cluster/peers":

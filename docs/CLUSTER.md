@@ -544,3 +544,23 @@ then closes Raft, journals an atomic move of `raft.db` and `snapshots/` into
 keys remain local. Only the newest superseded archive is retained. Interrupted
 moves resume before opening Raft; a reset node enrolls empty and catches up.
 The singleton user/security-write block is unchanged.
+
+### Recovery view and a learner as last surviving source
+
+`GET /_drop_cluster/recovery-view` is available only on the existing mTLS
+listener, with a valid application identity and `X-Drop-Cluster`. It reports
+`nodeID`, `clusterID`, `lastLogIndex`, `lastLogTerm`, `hasLeader`,
+`membershipRole` (`voter`, `learner`, `none`), `discoveryViewHash`,
+`evaluationState`, `recoveryMode`, `recovery` (`generation`, `lineage`) and
+`protocol`. Peer decoding tolerates extensions but validates known fields and
+binds the node ID to its certificate. A 404 is never agreement. None of these
+fields was added to the rolling-upgrade-sensitive `Status` JSON contract.
+
+If **no voter survives**, a fully caught-up learner may be the manual recovery
+source. Confirm that independently before proceeding: the request cannot prove
+that another host is permanently gone. Add `"allowLearner": true` to the usual
+`recover-singleton.json` request, retaining the exact `expectedLastIndex`.
+Without that explicit field, learner recovery remains refused without changing
+Raft state. All normal backups, identity checks, request consumption and the
+single-recovery-only rule still apply. A learner can lack acknowledged writes
+that reached voters; review the resulting metadata and security state.
