@@ -203,12 +203,10 @@ func TestDynamicVoterCountsAndBounds(t *testing.T) {
 	for count := 3; count <= 9; count++ {
 		if count > 3 {
 			n := h.add(nil)
-			if err := h.enroll(n); err != nil {
-				t.Fatal(err)
-			}
+			h.awaitEnrollment(n)
 		}
 		// Admission can precede catch-up; keep verifying the real TLS prefix.
-		h.step()
+		await(t, func() bool { return h.step() == nil })
 		h.now = h.now.Add(6 * time.Minute)
 		want := map[int]int{3: 3, 4: 3, 5: 5, 6: 5, 7: 7, 8: 7, 9: 7}[count]
 		h.awaitVoters(want)
@@ -216,11 +214,9 @@ func TestDynamicVoterCountsAndBounds(t *testing.T) {
 	// Unadmitted, discovered nodes never contribute to eligibility.
 	for len(h.nodes) < 16 {
 		n := h.add(nil)
-		if err := h.enroll(n); err != nil {
-			t.Fatal(err)
-		}
+		h.awaitEnrollment(n)
 	}
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	h.now = h.now.Add(6 * time.Minute)
 	h.awaitVoters(7)
 	extra := h.add(nil)
@@ -237,13 +233,11 @@ func TestDynamicWindowsAndFiveVoterFailureTolerance(t *testing.T) {
 	h := newChurnCluster(t)
 	for len(h.nodes) < 6 {
 		n := h.add(nil)
-		if err := h.enroll(n); err != nil {
-			t.Fatal(err)
-		}
+		h.awaitEnrollment(n)
 	}
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	h.now = h.now.Add(4 * time.Minute)
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	if h.voters() != 3 {
 		t.Fatal("raise window bypassed")
 	}
@@ -268,9 +262,9 @@ func TestDynamicWindowsAndFiveVoterFailureTolerance(t *testing.T) {
 	if err := leader.node.Commit(context.Background(), transaction("sessions/twofailures", 0, `true`)); err != nil {
 		t.Fatal("lost five-voter majority", err)
 	}
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	h.now = h.now.Add(time.Minute)
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	if h.voters() != 5 {
 		t.Fatal("failure grace bypassed")
 	}
@@ -289,9 +283,7 @@ func TestDynamicWindowsAndFiveVoterFailureTolerance(t *testing.T) {
 	})
 	for i := 0; i < 2; i++ {
 		n := h.add(nil)
-		if err := h.enroll(n); err != nil {
-			t.Fatal(err)
-		}
+		h.awaitEnrollment(n)
 	}
 	h.awaitVoters(5)
 	if err := leader.node.Commit(context.Background(), transaction("sessions/replaced", 0, `true`)); err != nil {
@@ -302,11 +294,9 @@ func TestDynamicLowerWindowAndPolicyFloor(t *testing.T) {
 	h := newChurnCluster(t)
 	for len(h.nodes) < 5 {
 		n := h.add(nil)
-		if err := h.enroll(n); err != nil {
-			t.Fatal(err)
-		}
+		h.awaitEnrollment(n)
 	}
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	h.now = h.now.Add(6 * time.Minute)
 	h.awaitVoters(5)
 	leader := h.leader()
@@ -318,19 +308,19 @@ func TestDynamicLowerWindowAndPolicyFloor(t *testing.T) {
 		}
 	}
 	h.stop(victim)
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	h.now = h.now.Add(14 * time.Minute)
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	if h.voters() != 5 {
 		t.Fatal("lower window bypassed")
 	}
 	// A short healthy sample restarts the entire lower window.
 	h.start(victim)
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	h.stop(victim)
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	h.now = h.now.Add(14 * time.Minute)
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	if h.voters() != 5 {
 		t.Fatal("flapping did not reset window")
 	}
@@ -338,7 +328,7 @@ func TestDynamicLowerWindowAndPolicyFloor(t *testing.T) {
 	h.awaitVoters(4)
 	// Healthy voters are never removed merely to make the count odd.
 	h.now = h.now.Add(time.Hour)
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	if h.voters() != 4 {
 		t.Fatal("healthy voter retired")
 	}
@@ -350,7 +340,7 @@ func TestDynamicLowerWindowAndPolicyFloor(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.now = h.now.Add(time.Hour)
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	if leader.enrollment.activeTarget < 5 {
 		t.Fatal("policy floor ignored")
 	}
@@ -359,7 +349,7 @@ func TestDynamicLowerWindowAndPolicyFloor(t *testing.T) {
 func TestCommittedMembershipExcludesPendingConfiguration(t *testing.T) {
 	h := newChurnCluster(t)
 	leader := h.leader()
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	spare := h.add(nil)
 	for _, node := range h.nodes[:3] {
 		if node != leader {

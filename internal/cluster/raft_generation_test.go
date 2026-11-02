@@ -134,9 +134,7 @@ func TestRaftGenerationRejectsOldLeaderBeforeRaftBytes(t *testing.T) {
 	// The current Flux cohort uses new identities and receives the new history.
 	for i := 0; i < 2; i++ {
 		fresh := h.add(nil)
-		if err := h.enroll(fresh); err != nil {
-			t.Fatal(err)
-		}
+		h.awaitEnrollment(fresh)
 	}
 	h.awaitVoters(3)
 	if err := survivor.node.Commit(context.Background(), transaction("sessions/new-write", 0, `true`)); err != nil {

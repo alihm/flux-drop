@@ -53,9 +53,7 @@ func TestManualLearnerRecoveryRequiresExplicitPermission(t *testing.T) {
 	leader := h.leader()
 	h.step()
 	learner := h.add(nil)
-	if err := h.enroll(learner); err != nil {
-		t.Fatal(err)
-	}
+	h.awaitEnrollment(learner)
 	if err := leader.node.Commit(context.Background(), transaction("projects/learner-recovery", 0, `{"owner":"uid"}`)); err != nil {
 		t.Fatal(err)
 	}

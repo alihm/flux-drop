@@ -13,13 +13,9 @@ func TestRetiredVoterAndLearnerRejoinWithState(t *testing.T) {
 	h := newChurnCluster(t)
 	leader := h.leader()
 	// Register the bootstrap voters' real keys before the first failure.
-	if err := h.step(); err != nil {
-		t.Fatal(err)
-	}
+	await(t, func() bool { return h.step() == nil })
 	spare := h.add(nil)
-	if err := h.enroll(spare); err != nil {
-		t.Fatal(err)
-	}
+	h.awaitEnrollment(spare)
 	var victim *churnNode
 	for _, n := range h.nodes[:3] {
 		if n != leader {
@@ -29,7 +25,7 @@ func TestRetiredVoterAndLearnerRejoinWithState(t *testing.T) {
 	}
 	for round := 0; round < 2; round++ {
 		h.stop(victim)
-		h.step()
+		await(t, func() bool { return h.step() == nil })
 		h.now = h.now.Add(3 * time.Minute)
 		await(t, func() bool {
 			h.step()
@@ -49,9 +45,7 @@ func TestRetiredVoterAndLearnerRejoinWithState(t *testing.T) {
 			t.Fatal(err)
 		}
 		await(t, func() bool { return victim.enrollment.shouldRequestRejoin(true, h.now.Add(3*time.Minute)) })
-		if err := h.enroll(victim); err != nil {
-			t.Fatal("return refused", err)
-		}
+		h.awaitEnrollment(victim)
 		await(t, func() bool { return victim.node.state.appliedIndex() >= leader.node.state.appliedIndex() })
 		if h.leader().config.Local.ID != id || leader.node.raft.CurrentTerm() != before {
 			t.Fatal("return disrupted leader")
@@ -65,13 +59,11 @@ func TestRetiredVoterAndLearnerRejoinWithState(t *testing.T) {
 func TestRetiredHigherTermWaitsWithoutDisruptingLeader(t *testing.T) {
 	h := newChurnCluster(t)
 	leader := h.leader()
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	spare := h.add(nil)
-	if err := h.enroll(spare); err != nil {
-		t.Fatal(err)
-	}
+	h.awaitEnrollment(spare)
 	h.stop(spare)
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	h.now = h.now.Add(3 * time.Minute)
 	await(t, func() bool {
 		h.step()
@@ -109,13 +101,11 @@ func TestRetiredHigherTermWaitsWithoutDisruptingLeader(t *testing.T) {
 func TestRetiredDifferentKeyAndCurrentLostVoterRefused(t *testing.T) {
 	h := newChurnCluster(t)
 	leader := h.leader()
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	spare := h.add(nil)
-	if err := h.enroll(spare); err != nil {
-		t.Fatal(err)
-	}
+	h.awaitEnrollment(spare)
 	h.stop(spare)
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	h.now = h.now.Add(3 * time.Minute)
 	await(t, func() bool {
 		h.step()

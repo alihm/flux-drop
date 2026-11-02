@@ -15,14 +15,10 @@ import (
 func TestRecoveryGenerationStrandedLearnersResetAndRejoin(t *testing.T) {
 	h := newChurnCluster(t)
 	leader := h.leader()
-	if err := h.step(); err != nil {
-		t.Fatal(err)
-	}
+	await(t, func() bool { return h.step() == nil })
 	learners := []*churnNode{h.add(nil), h.add(nil)}
 	for _, learner := range learners {
-		if err := h.enroll(learner); err != nil {
-			t.Fatal(err)
-		}
+		h.awaitEnrollment(learner)
 	}
 	if err := leader.node.Commit(context.Background(), transaction("sessions/generation", 0, `{"uid":"owner"}`)); err != nil {
 		t.Fatal(err)
@@ -90,9 +86,7 @@ func TestRecoveryGenerationStrandedLearnersResetAndRejoin(t *testing.T) {
 			t.Fatal(err)
 		}
 		h.start(learner)
-		if err := h.enroll(learner); err != nil {
-			t.Fatal("empty reset node did not enroll", err)
-		}
+		h.awaitEnrollment(learner)
 		await(t, func() bool { g, _ := learner.node.recoveryGeneration(); return g == generation })
 	}
 	h.awaitVoters(3)
@@ -122,9 +116,7 @@ func TestRecoveryGenerationDiscardsLearnerUncommittedTail(t *testing.T) {
 	leader := h.leader()
 	h.step()
 	learner := h.add(nil)
-	if err := h.enroll(learner); err != nil {
-		t.Fatal(err)
-	}
+	h.awaitEnrollment(learner)
 	var survivor *churnNode
 	for _, node := range h.nodes[:3] {
 		if node != leader {
@@ -178,9 +170,7 @@ func TestRecoveryGenerationDiscardsLearnerUncommittedTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.start(learner)
-	if err := h.enroll(learner); err != nil {
-		t.Fatal(err)
-	}
+	h.awaitEnrollment(learner)
 	if learner.node.state.read([]string{"cluster_trace/uncommitted-tail"})["cluster_trace/uncommitted-tail"].Version != 0 {
 		t.Fatal("discarded tail resurrected")
 	}
@@ -191,9 +181,7 @@ func TestGenerationZeroCannotCertifyUnretiredAbsentHistory(t *testing.T) {
 	leader := h.leader()
 	h.step()
 	node := h.add(nil)
-	if err := h.enroll(node); err != nil {
-		t.Fatal(err)
-	}
+	h.awaitEnrollment(node)
 	// An absent unretired history could have been stranded by a pre-generation
 	// recovery. A generation-zero handshake alone cannot prove its lineage.
 	if err := leader.node.RemoveMember(context.Background(), node.config.Local.ID); err != nil {
@@ -219,9 +207,7 @@ func TestSupersededArchiveRetentionAndSymlinkRefusal(t *testing.T) {
 	leader := h.leader()
 	h.step()
 	node := h.add(nil)
-	if err := h.enroll(node); err != nil {
-		t.Fatal(err)
-	}
+	h.awaitEnrollment(node)
 	notes := filepath.Join(node.config.StateDir, "superseded-notes")
 	os.WriteFile(notes, []byte("operator notes"), 0600)
 	for round := 0; round < 2; round++ {
@@ -249,9 +235,7 @@ func TestSupersededArchiveRetentionAndSymlinkRefusal(t *testing.T) {
 			t.Fatal(err)
 		}
 		h.start(node)
-		if err := h.enroll(node); err != nil {
-			t.Fatal(err)
-		}
+		h.awaitEnrollment(node)
 	}
 	h.stop(node)
 	directory := "superseded-" + recoveryTimestamp()

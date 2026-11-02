@@ -81,7 +81,7 @@ func TestRestoreSingletonAfterTotalStateLoss(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer restored.Close()
-	await(t, func() bool { return restored.raft.State() == raft.Leader })
+	await(t, func() bool { return restored.raft.State() == raft.Leader && !restored.generationPending.Load() })
 	awaitAsync(t, restored)
 	records := restored.state.read([]string{"sessions/owner", "projects/project", "owner_projects/owner", "projects/lostlater"})
 	if len(records) != 3 || records["projects/lostlater"].Version != 0 {
@@ -101,7 +101,7 @@ func TestRestoreSingletonAfterTotalStateLoss(t *testing.T) {
 		t.Fatal("second restart", err)
 	}
 	defer again.Close()
-	await(t, func() bool { return again.raft.State() == raft.Leader })
+	await(t, func() bool { return again.raft.State() == raft.Leader && !again.generationPending.Load() })
 }
 
 func TestRestoreRefusalsLeaveStateUnchanged(t *testing.T) {

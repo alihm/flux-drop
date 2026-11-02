@@ -50,7 +50,7 @@ func loseMajority(t *testing.T) (*churnCluster, *churnNode) {
 	t.Helper()
 	h := newChurnCluster(t)
 	leader := h.leader()
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	if err := leader.node.Commit(context.Background(), transaction("sessions/auto-recover", 0, `{"uid":"owner"}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -154,9 +154,7 @@ func TestAutomaticRecoveryObserveAndOn(t *testing.T) {
 			}
 			for i := 0; i < 2; i++ {
 				fresh := h.add(nil)
-				if err := h.enroll(fresh); err != nil {
-					t.Fatal(err)
-				}
+				h.awaitEnrollment(fresh)
 			}
 			h.awaitVoters(3)
 			if err := node.node.Commit(context.Background(), transaction("sessions/rebuilt", 0, `true`)); err != nil {
@@ -230,11 +228,9 @@ func testAutomaticRecoveryGuards(t *testing.T, mode string) {
 	t.Setenv(PassphraseEnv, strings.Repeat("guard-secret-", 4))
 	h := newChurnCluster(t)
 	leader := h.leader()
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	learner := h.add(nil)
-	if err := h.enroll(learner); err != nil {
-		t.Fatal(err)
-	}
+	h.awaitEnrollment(learner)
 	fault := recoveryFaultServer(t, h, learner)
 	var lost []*churnNode
 	for _, n := range h.nodes[:3] {
@@ -403,18 +399,23 @@ func TestAutomaticRecoveryChoosesCompleteLearnerAndResetsOther(t *testing.T) {
 	t.Setenv(PassphraseEnv, strings.Repeat("learner-auto-secret-", 3))
 	h := newChurnCluster(t)
 	leader := h.leader()
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	old := h.add(nil)
 	complete := h.add(nil)
 	for _, n := range []*churnNode{old, complete} {
-		if err := h.enroll(n); err != nil {
-			t.Fatal(err)
-		}
+		h.awaitEnrollment(n)
 	}
 	h.stop(old)
-	if err := leader.node.Commit(context.Background(), transaction("projects/learner-tail", 0, `{"owner":"uid"}`)); err != nil {
-		t.Fatal(err)
-	}
+	await(t, func() bool {
+		rows, err := leader.node.Read(context.Background(), []string{"projects/learner-tail"})
+		if err != nil {
+			return false
+		}
+		if row := rows["projects/learner-tail"]; row.Version != 0 {
+			return string(row.Value) == `{"owner":"uid"}`
+		}
+		return leader.node.Commit(context.Background(), transaction("projects/learner-tail", 0, `{"owner":"uid"}`)) == nil
+	})
 	await(t, func() bool {
 		return complete.node.state.read([]string{"projects/learner-tail"})["projects/learner-tail"].Version != 0
 	})
@@ -470,16 +471,12 @@ func TestAutomaticRecoveryChoosesCompleteLearnerAndResetsOther(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.start(old)
-	if err := h.enroll(old); err != nil {
-		t.Fatal(err)
-	}
+	h.awaitEnrollment(old)
 	if old.node.state.read([]string{"projects/learner-tail"})["projects/learner-tail"].Version == 0 {
 		t.Fatal("older learner retained its incomplete FSM")
 	}
 	fresh := h.add(nil)
-	if err := h.enroll(fresh); err != nil {
-		t.Fatal(err)
-	}
+	h.awaitEnrollment(fresh)
 	h.awaitVoters(3)
 }
 
@@ -488,11 +485,9 @@ func TestAutomaticRecoveryTwoSurvivingVotersChooseCompleteHistory(t *testing.T) 
 	h := newChurnCluster(t)
 	for len(h.nodes) < 5 {
 		n := h.add(nil)
-		if err := h.enroll(n); err != nil {
-			t.Fatal(err)
-		}
+		h.awaitEnrollment(n)
 	}
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	h.now = h.now.Add(6 * time.Minute)
 	h.awaitVoters(5)
 	for _, node := range h.nodes {
@@ -640,7 +635,7 @@ func TestRecoveryCooldownAndPendingRequests(t *testing.T) {
 func TestMultipleLeadersDisableRecoveryAndRejoin(t *testing.T) {
 	t.Setenv(PassphraseEnv, strings.Repeat("split-brain-test-", 3))
 	h := newChurnCluster(t)
-	h.step()
+	await(t, func() bool { return h.step() == nil })
 	// Deliberately violate the operator runbook in the fixture: two independent
 	// recoveries produce real sole-voter leaders on real TLS transports.
 	for _, n := range h.nodes {

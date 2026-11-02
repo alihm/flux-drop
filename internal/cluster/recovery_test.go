@@ -173,7 +173,9 @@ func TestSingletonRecoveryRealTLSAndReenrollment(t *testing.T) {
 	nodes[0] = nil
 	writeSingleton(t, configs[0])
 	startNode(0)
-	await(t, func() bool { return nodes[0].raft.State() == raft.Leader })
+	// Election precedes the asynchronous generation commit. Enrollment must
+	// wait for both, using await's bounded deadline rather than a sleep.
+	await(t, func() bool { return nodes[0].raft.State() == raft.Leader && !nodes[0].generationPending.Load() })
 	awaitAsync(t, nodes[0])
 	for i, key := range keys {
 		if string(nodes[0].state.read(keys)[key].Value) != values[i] {
@@ -268,9 +270,23 @@ func TestSingletonRecoveryRealTLSAndReenrollment(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer requester.client.CloseIdleConnections()
-		if err := requester.request(ctx); err != nil {
-			t.Fatal("authenticated enrollment", err)
+		// A verified leader may briefly lack its async authority lease, or an
+		// enrollment response can race learner catch-up. Retry the idempotent
+		// request with an overall deadline rather than assuming one HTTP attempt.
+		enrollmentCtx, stopEnrollment := context.WithTimeout(ctx, 15*time.Second)
+		for {
+			err := requester.request(enrollmentCtx)
+			if err == nil {
+				break
+			}
+			select {
+			case <-enrollmentCtx.Done():
+				stopEnrollment()
+				t.Fatal("authenticated enrollment", err)
+			case <-time.After(20 * time.Millisecond):
+			}
 		}
+		stopEnrollment()
 		cf := nodes[0].raft.GetConfiguration()
 		if err := cf.Error(); err != nil {
 			t.Fatal(err)
@@ -329,8 +345,56 @@ func TestSingletonRecoveryRealTLSAndReenrollment(t *testing.T) {
 	if len(done) != 1 || len(after) != 1 {
 		t.Fatal("recovery repeated", done, after)
 	}
+	// Each failure starts from three healthy, caught-up voters. A membership
+	// future on the leader alone does not prove every restarted voter has the
+	// committed configuration or has applied the generation yet.
+	synchronizeVoters := func(round int) {
+		key := "cluster_recovery/failover_ready" + fmtInt(round)
+		await(t, func() bool {
+			var leader *Node
+			for _, j := range []int{0, 3, 4} {
+				if nodes[j] != nil && nodes[j].raft.State() == raft.Leader && nodes[j].Ready(ctx) == nil {
+					leader = nodes[j]
+					break
+				}
+			}
+			if leader == nil {
+				return false
+			}
+			row := leader.state.read([]string{key})[key]
+			if row.Version == 0 {
+				if err := leader.Commit(ctx, transaction(key, 0, `true`)); err != nil {
+					return false
+				}
+				row = leader.state.read([]string{key})[key]
+			}
+			if row.Version == 0 {
+				return false
+			}
+			for _, j := range []int{0, 3, 4} {
+				if nodes[j] == nil || nodes[j].generationPending.Load() || nodes[j].state.read([]string{key})[key].Version != row.Version {
+					return false
+				}
+				configuration := nodes[j].raft.GetConfiguration()
+				if configuration.Error() != nil {
+					return false
+				}
+				voters := 0
+				for _, member := range configuration.Configuration().Servers {
+					if member.Suffrage == raft.Voter {
+						voters++
+					}
+				}
+				if voters != 3 {
+					return false
+				}
+			}
+			return true
+		})
+	}
 	// Each of the three voters may be stopped in turn, leaving a working majority.
-	for _, i := range []int{0, 3, 4} {
+	for round, i := range []int{0, 3, 4} {
+		synchronizeVoters(round)
 		nodes[i].Close()
 		nodes[i] = nil
 		await(t, func() bool {
@@ -359,7 +423,7 @@ func TestSingletonRecoveryRealTLSAndReenrollment(t *testing.T) {
 		t.Fatal("pre-recovery copy unusable", err)
 	}
 	defer saved.Close()
-	await(t, func() bool { return saved.raft.State() == raft.Leader })
+	await(t, func() bool { return saved.raft.State() == raft.Leader && !saved.generationPending.Load() })
 	for i, key := range keys {
 		if string(saved.state.read(keys)[key].Value) != values[i] {
 			t.Fatal("backup copy lost", key)
@@ -525,7 +589,7 @@ func TestSingletonRecoverySnapshotOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer node.Close()
-	await(t, func() bool { return node.raft.State() == raft.Leader })
+	await(t, func() bool { return node.raft.State() == raft.Leader && !node.generationPending.Load() })
 	if string(node.state.read([]string{"sessions/snapshot"})["sessions/snapshot"].Value) != `{"retained":true}` {
 		t.Fatal("snapshot-only recovery lost metadata")
 	}
