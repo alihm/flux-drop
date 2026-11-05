@@ -32,6 +32,20 @@ async function ready(){
   for(let i=0;i<90;i++){try{if((await fetch(base+'/readyz',{signal:AbortSignal.timeout(1000)})).status===200)return}catch{};await new Promise(r=>setTimeout(r,1000))}
   throw Error('staging container did not become ready');
 }
+async function appliedOn(nodes){
+ const status=node=>JSON.parse(compose('exec','-T',node,'/usr/local/bin/drop-cluster','-status'));
+ let reports=nodes.map(status);
+ // A successful site response may confirm an absent grant through the leader.
+ // Before removing quorum, explicitly establish the local applied-state fixture.
+ // StateIndex is consumed FSM metadata; AppliedIndex alone is only queued work.
+ const target=Math.max(...reports.map(s=>s.stateIndex));
+ assert.ok(Number.isSafeInteger(target)&&target>0,'invalid committed metadata position');
+ for(const deadline=Date.now()+30000;;){
+  if(reports.every(s=>Number.isSafeInteger(s.stateIndex)&&s.stateIndex>=target))return;
+  if(Date.now()>=deadline)throw Error('fixture metadata did not apply before quorum loss: '+JSON.stringify({target,reports}));
+  await new Promise(resolve=>setTimeout(resolve,100));reports=nodes.map(status);
+ }
+}
 function contentWithoutWatermark(body){
   // Public serving adds the default watermark; content bytes remain unchanged.
   assert.match(body,/<a data-drop-watermark="runonflux"[^>]+href="https:\/\/runonflux.com\/apps\/drop"/);
@@ -104,6 +118,7 @@ assert.equal(contentWithoutWatermark((await serving(path,{headers:navigation},re
 p=(await call('/api/projects/'+p.id+'/privacy',{method:'PUT',body:{private:true,password:'a replacement raft password'},headers:{'If-Match':'"'+p.revision+'"'}})).data.project;
 await serving(path,{headers:navigation,status:303});
 await call('/api/unlock',{method:'POST',body:{slug:p.slug,password:'a replacement raft password'}});
+await appliedOn(survivors);
 assert.equal(contentWithoutWatermark((await serving(path,{headers:navigation},revised)).data),revised);
 compose('stop',survivors[1]);
 for(let i=0;i<30;i++){
