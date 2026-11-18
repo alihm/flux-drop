@@ -10,7 +10,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/drop ./cmd/drop &&
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/drop-mcp ./cmd/drop-mcp
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/drop-browser ./cmd/drop-browser
 
-FROM nginx:1.30.5-alpine AS app
+FROM nginx:1.30.7-alpine AS app
 RUN apk add --no-cache chromium nodejs npm font-noto
 WORKDIR /opt/drop-preview
 COPY deploy/preview/package.json deploy/preview/package-lock.json ./

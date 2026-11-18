@@ -8,7 +8,7 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
   nginx:
-    image: nginx:1.30.5-alpine
+    image: nginx:1.30.7-alpine
     entrypoint: [nginx, -g, "daemon off;"]
     depends_on: [fixture]
     ports: ["127.0.0.1:18443:8443"]
